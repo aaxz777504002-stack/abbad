@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "PendingRequest": {
+      "title": "PendingRequest",
+      "description": "Self-registration request submitted by hotel guests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "country": { "type": "string" },
+        "mobile": { "type": "string" },
+        "email": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "notes": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "checkInDate": { "type": "string" },
+        "status": { "type": "string" },
+        "date": { "type": "string" },
+        "administrativeRole": { "type": "string" },
+        "year": { "type": "string" },
+        "visitType": { "type": "string" }
+      },
+      "required": ["name", "mobile"]
+    },
+    "HotelConfig": {
+      "title": "HotelConfig",
+      "description": "Global hotel configuration and registration link status",
+      "type": "object",
+      "properties": {
+        "hotelName": { "type": "string" },
+        "registrationLinkStatus": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/pending_requests/{requestId}": {
+      "schema": "PendingRequest",
+      "description": "Guest self-registration requests"
+    },
+    "/config/{docId}": {
+      "schema": "HotelConfig",
+      "description": "Global system configuration"
+    }
+  }
+}

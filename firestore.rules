@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Hotel guest registration requests - accessible for guest self-registration & reception review
+    match /pending_requests/{requestId} {
+      allow read, create, update, delete: if true;
+    }
+
+    // Hotel general configuration and registration link status
+    match /config/{docId} {
+      allow read, write: if true;
+    }
+
+    // Default fallback
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

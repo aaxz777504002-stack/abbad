@@ -1,0 +1,6 @@
+{
+  "name": "خدر ليالي الانس",
+  "description": "نظام احترافي لإدارة الغرف الفندقية والنزلاء، مدمج مع قوقل شيت وجدول البيانات لإدارة الحجوزات وتسكين النزلاء بكل سهولة.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
