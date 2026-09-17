@@ -1902,7 +1902,12 @@ export default function App() {
 
     // 2. Load complete hotel data (rooms, guests, services, requests) from Node.js backend
     fetch("/api/hotel-data", { credentials: "include" })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) return null;
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) return null;
+        return res.json();
+      })
       .then(data => {
         if (data && data.success) {
           if (Array.isArray(data.rooms) && data.rooms.length > 0) {
@@ -1919,9 +1924,7 @@ export default function App() {
           }
         }
       })
-      .catch(err => {
-        console.warn("Backend hotel data sync fetch notice:", err);
-      });
+      .catch(() => {});
 
     // Unblock cookies & check storage access
     try {
@@ -2575,21 +2578,23 @@ export default function App() {
         await fetchPendingRequests();
         triggerNotification("success", "تم تحديث ومزامنة البيانات بالكامل من قوقل شيت والخادم السحابي! 🟢");
       } else {
-        // Refresh from backend server /api/hotel-data
+        // Refresh from backend server /api/hotel-data if available
         const res = await fetch("/api/hotel-data", { credentials: "include" });
-        const data = await res.json();
-        if (data && data.success) {
-          if (Array.isArray(data.rooms) && data.rooms.length > 0) {
-            setRooms(data.rooms);
-            localStorage.setItem("hotel_rooms", JSON.stringify(data.rooms));
-          }
-          if (Array.isArray(data.guests) && data.guests.length > 0) {
-            setGuests(data.guests);
-            localStorage.setItem("hotel_guests", JSON.stringify(data.guests));
-          }
-          if (Array.isArray(data.serviceRequests) && data.serviceRequests.length > 0) {
-            setServiceRequests(data.serviceRequests);
-            localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
+        if (res.ok && (res.headers.get("content-type") || "").includes("application/json")) {
+          const data = await res.json();
+          if (data && data.success) {
+            if (Array.isArray(data.rooms) && data.rooms.length > 0) {
+              setRooms(data.rooms);
+              localStorage.setItem("hotel_rooms", JSON.stringify(data.rooms));
+            }
+            if (Array.isArray(data.guests) && data.guests.length > 0) {
+              setGuests(data.guests);
+              localStorage.setItem("hotel_guests", JSON.stringify(data.guests));
+            }
+            if (Array.isArray(data.serviceRequests) && data.serviceRequests.length > 0) {
+              setServiceRequests(data.serviceRequests);
+              localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
+            }
           }
         }
         await fetchPendingRequests();
