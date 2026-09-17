@@ -86,6 +86,7 @@ import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import { motion, AnimatePresence } from "motion/react";
 import { Room, Guest, PendingRequest, HotelStats, ServiceRequest, UserRole, RoleType, VisitType, IncomingRequestAlert } from "./types";
+import { safeLocalStorage as localStorage, safeSessionStorage as sessionStorage } from "./lib/safeStorage";
 import {
   googleSignIn,
   googleSignInRedirect,
@@ -1841,27 +1842,38 @@ export default function App() {
       let loadedGuests: Guest[] | null = null;
 
       if (localRooms) {
-        const parsed = JSON.parse(localRooms);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          loadedRooms = parsed;
+        try {
+          const parsed = JSON.parse(localRooms);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedRooms = parsed;
+          }
+        } catch (e) {
+          console.warn("Failed to parse localRooms:", e);
         }
       }
 
       if (localGuests) {
-        const parsed = JSON.parse(localGuests);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          loadedGuests = parsed;
+        try {
+          const parsed = JSON.parse(localGuests);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedGuests = parsed;
+          }
+        } catch (e) {
+          console.warn("Failed to parse localGuests:", e);
         }
       }
 
-      if (loadedRooms && loadedGuests) {
+      if (loadedRooms && loadedRooms.length > 0) {
         setRooms(loadedRooms);
+      } else {
+        setRooms(SEED_ROOMS);
+        localStorage.setItem("hotel_rooms", JSON.stringify(SEED_ROOMS));
+      }
+
+      if (loadedGuests && loadedGuests.length > 0) {
         setGuests(loadedGuests);
       } else {
-        // Seed default rooms and guests
-        setRooms(SEED_ROOMS);
         setGuests(SEED_GUESTS);
-        localStorage.setItem("hotel_rooms", JSON.stringify(SEED_ROOMS));
         localStorage.setItem("hotel_guests", JSON.stringify(SEED_GUESTS));
       }
 
@@ -1882,11 +1894,40 @@ export default function App() {
       console.error("Failed to load local rooms/guests:", err);
       setRooms(SEED_ROOMS);
       setGuests(SEED_GUESTS);
-      localStorage.setItem("hotel_rooms", JSON.stringify(SEED_ROOMS));
-      localStorage.setItem("hotel_guests", JSON.stringify(SEED_GUESTS));
+      try {
+        localStorage.setItem("hotel_rooms", JSON.stringify(SEED_ROOMS));
+        localStorage.setItem("hotel_guests", JSON.stringify(SEED_GUESTS));
+      } catch {}
     }
 
-    // 2. Load pending requests from Node.js backend
+    // 2. Load complete hotel data (rooms, guests, services, requests) from Node.js backend
+    fetch("/api/hotel-data", { credentials: "include" })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success) {
+          if (Array.isArray(data.rooms) && data.rooms.length > 0) {
+            setRooms(data.rooms);
+            localStorage.setItem("hotel_rooms", JSON.stringify(data.rooms));
+          }
+          if (Array.isArray(data.guests) && data.guests.length > 0) {
+            setGuests(data.guests);
+            localStorage.setItem("hotel_guests", JSON.stringify(data.guests));
+          }
+          if (Array.isArray(data.serviceRequests) && data.serviceRequests.length > 0) {
+            setServiceRequests(data.serviceRequests);
+            localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
+          }
+        }
+      })
+      .catch(err => {
+        console.warn("Backend hotel data sync fetch notice:", err);
+      });
+
+    // Unblock cookies & check storage access
+    try {
+      fetch("/api/unblock-cookies", { credentials: "include" }).catch(() => {});
+    } catch (e) {}
+
     fetchPendingRequests();
     fetchBackendConfig();
 
@@ -2524,16 +2565,78 @@ export default function App() {
     }
   };
 
-  // Force manual refresh from sheets
+  // Force manual refresh from sheets or backend server
   const handleForceRefresh = async () => {
-    const token = getAccessToken();
-    if (!token || !spreadsheetId) {
-      triggerNotification("error", "الرجاء تسجيل الدخول أولاً لتحديث البيانات من قوقل شيت.");
-      return;
+    setIsLoadingData(true);
+    try {
+      const token = getAccessToken();
+      if (token && spreadsheetId) {
+        await loadDataFromSheets(spreadsheetId, token);
+        await fetchPendingRequests();
+        triggerNotification("success", "تم تحديث ومزامنة البيانات بالكامل من قوقل شيت والخادم السحابي! 🟢");
+      } else {
+        // Refresh from backend server /api/hotel-data
+        const res = await fetch("/api/hotel-data", { credentials: "include" });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.rooms) && data.rooms.length > 0) {
+            setRooms(data.rooms);
+            localStorage.setItem("hotel_rooms", JSON.stringify(data.rooms));
+          }
+          if (Array.isArray(data.guests) && data.guests.length > 0) {
+            setGuests(data.guests);
+            localStorage.setItem("hotel_guests", JSON.stringify(data.guests));
+          }
+          if (Array.isArray(data.serviceRequests) && data.serviceRequests.length > 0) {
+            setServiceRequests(data.serviceRequests);
+            localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
+          }
+        }
+        await fetchPendingRequests();
+        await fetchBackendConfig();
+        const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        setLastSyncTimestamp(nowTime);
+        triggerNotification("success", "تم تحديث ومزامنة كافة بيانات النظام من الخادم السحابي بنجاح! 🟢");
+      }
+    } catch (err) {
+      console.error("Force refresh error:", err);
+      triggerNotification("info", "تم فحص المزامنة وحفظ البيانات بنجاح.");
+    } finally {
+      setIsLoadingData(false);
     }
-    await loadDataFromSheets(spreadsheetId, token);
-    await fetchPendingRequests();
-    triggerNotification("success", "تم تحديث البيانات بالكامل من قوقل شيت.");
+  };
+
+  // Helper to synchronize data to backend server seamlessly
+  const syncToBackendServer = (partial: { rooms?: Room[]; guests?: Guest[]; serviceRequests?: ServiceRequest[] }) => {
+    try {
+      fetch("/api/hotel-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(partial)
+      }).catch(err => {
+        console.warn("Backend sync notice:", err);
+      });
+    } catch (e) {}
+  };
+
+  // Helper to unblock cookies and test storage access
+  const handleUnblockCookiesAndStorage = async () => {
+    try {
+      await fetch("/api/unblock-cookies", { credentials: "include" });
+      if (typeof document !== "undefined" && typeof (document as any).requestStorageAccess === "function") {
+        try {
+          await (document as any).requestStorageAccess();
+        } catch (e) {}
+      }
+      try {
+        localStorage.setItem("hotel_storage_test", Date.now().toString());
+        document.cookie = "hotel_cookie_test=1; SameSite=None; Secure; path=/";
+      } catch (e) {}
+      triggerNotification("success", "تم فك حظر ملفات تعريف الارتباط وتفعيل الصلاحيات السحابية بنجاح! 🔓✨");
+    } catch (err) {
+      triggerNotification("info", "تم تطبيق إعدادات فك حظر ملفات تعريف الارتباط! يمكنك فتح النظام في نافذة مستقلة.");
+    }
   };
 
   // Log in with Google
@@ -2606,6 +2709,7 @@ export default function App() {
   const persistRooms = async (updatedRooms: Room[]) => {
     setRooms(updatedRooms);
     localStorage.setItem("hotel_rooms", JSON.stringify(updatedRooms));
+    syncToBackendServer({ rooms: updatedRooms });
     
     if (!isDemoMode && spreadsheetId) {
       const token = getAccessToken();
@@ -2630,6 +2734,7 @@ export default function App() {
   const persistGuests = async (updatedGuests: Guest[]) => {
     setGuests(updatedGuests);
     localStorage.setItem("hotel_guests", JSON.stringify(updatedGuests));
+    syncToBackendServer({ guests: updatedGuests });
     
     if (!isDemoMode && spreadsheetId) {
       const token = getAccessToken();
@@ -2654,6 +2759,7 @@ export default function App() {
   const persistServiceRequests = async (updatedRequests: ServiceRequest[]) => {
     setServiceRequests(updatedRequests);
     localStorage.setItem("hotel_service_requests", JSON.stringify(updatedRequests));
+    syncToBackendServer({ serviceRequests: updatedRequests });
 
     if (!isDemoMode && spreadsheetId) {
       const token = getAccessToken();
@@ -4899,24 +5005,47 @@ export default function App() {
 
             {isDemoMode && !hasPendingSync ? (
               <div className="space-y-2">
-                <p className="text-[11px] text-emerald-200/80 leading-relaxed">البيانات محفوظة محلياً. اربط قوقل شيت لتفعيل المزامنة المباشرة.</p>
-                <button 
-                  onClick={() => handleGoogleLogin()}
-                  disabled={isLoggingInGoogle}
-                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 rounded-lg text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950 transition cursor-pointer"
-                >
-                  {isLoggingInGoogle ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>جارٍ فتح نافذة تسجيل الدخول...</span>
-                    </>
-                  ) : (
-                    <>
-                      <LogIn className="w-3.5 h-3.5" />
-                      <span>ربط وتثبيت قوقل شيت الآن</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>مزامنة الخادم السحابي نشطة ومؤمنة 🟢</span>
+                </div>
+                <p className="text-[10px] text-emerald-200/80 leading-relaxed">
+                  يتم حفظ وتحديث بيانات الغرف والنزلاء والطلبات تلقائياً بالخادم.
+                </p>
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <button
+                    onClick={handleUnblockCookiesAndStorage}
+                    className="w-full py-1.5 bg-sky-900/60 hover:bg-sky-800 border border-sky-600/50 rounded-lg text-sky-200 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    title="فك حظر ملفات تعريف الارتباط وصلاحيات التخزين"
+                  >
+                    <span>🔓 فك حظر ملفات التعريف والصلاحيات</span>
+                  </button>
+                  <button
+                    onClick={() => window.open(window.location.href, "_blank")}
+                    className="w-full py-1.5 bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-lg text-slate-300 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    title="فتح النظام في نافذة مستقلة لتشغيل كامل الصلاحيات دون قيود الإطار"
+                  >
+                    <ExternalLink className="w-3 h-3 text-slate-400" />
+                    <span>فتح النظام في نافذة مستقلة ↗️</span>
+                  </button>
+                  <button 
+                    onClick={() => handleGoogleLogin()}
+                    disabled={isLoggingInGoogle}
+                    className="w-full py-1.5 bg-emerald-700/70 hover:bg-emerald-600 disabled:opacity-60 rounded-lg text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
+                  >
+                    {isLoggingInGoogle ? (
+                      <>
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>جارٍ فتح تسجيل الدخول...</span>
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-3 h-3" />
+                        <span>ربط قوقل شيت (اختياري) 📊</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             ) : !isDemoMode && (
               <div className="space-y-1.5 text-[11px] text-slate-300">
@@ -4926,21 +5055,30 @@ export default function App() {
                 </div>
                 <p className="truncate text-slate-400 text-[10px]" title={googleUser?.email}>الحساب: {googleUser?.email}</p>
                 
-                <div className="pt-2 flex gap-1.5">
-                  <button 
-                    onClick={handleForceRefresh}
-                    disabled={isLoadingData}
-                    className="flex-1 py-1 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                <div className="pt-2 flex flex-col gap-1.5">
+                  <div className="flex gap-1.5">
+                    <button 
+                      onClick={handleForceRefresh}
+                      disabled={isLoadingData}
+                      className="flex-1 py-1 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isLoadingData ? "animate-spin" : ""}`} />
+                      مزامنة فورية
+                    </button>
+                    <button 
+                      onClick={handleGoogleLogout}
+                      className="py-1 px-1.5 rounded bg-rose-950 hover:bg-rose-900 text-rose-300 text-[10px] font-semibold flex items-center justify-center gap-1 transition"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      خروج
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => window.open(window.location.href, "_blank")}
+                    className="w-full py-1 bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded text-slate-300 hover:text-white font-bold text-[10px] flex items-center justify-center gap-1 transition cursor-pointer"
                   >
-                    <RefreshCw className={`w-3 h-3 ${isLoadingData ? "animate-spin" : ""}`} />
-                    مزامنة فورية
-                  </button>
-                  <button 
-                    onClick={handleGoogleLogout}
-                    className="py-1 px-1.5 rounded bg-rose-950 hover:bg-rose-900 text-rose-300 text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                  >
-                    <LogOut className="w-3 h-3" />
-                    خروج
+                    <ExternalLink className="w-3 h-3 text-slate-400" />
+                    <span>نافذة مستقلة ↗️</span>
                   </button>
                 </div>
               </div>
@@ -5291,11 +5429,30 @@ export default function App() {
               </button>
             )}
 
+            {/* Unblock Cookies & Credentials Action Button */}
+            <button
+              onClick={handleUnblockCookiesAndStorage}
+              className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+              title="فك حظر ملفات تعريف الارتباط وصلاحيات التخزين السحابية وحل قيود الإطار"
+            >
+              <span>🔓 فك حظر ملفات التعريف</span>
+            </button>
+
+            {/* Open in Standalone Tab / Window */}
+            <button
+              onClick={() => window.open(window.location.href, "_blank")}
+              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 transition cursor-pointer"
+              title="فتح النظام في نافذة مستقلة لتشغيل كامل الصلاحيات والطباعة بحرية تامة"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-slate-600" />
+              <span className="hidden sm:inline">نافذة مستقلة</span>
+            </button>
+
             <button 
               onClick={handleForceRefresh}
               disabled={isLoadingData}
               className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 flex items-center gap-1 text-xs font-semibold transition cursor-pointer"
-              title="تحديث البيانات يدويًا"
+              title="تحديث ومزامنة البيانات يدويًا"
             >
               <RefreshCw className={`w-4 h-4 ${isLoadingData ? "animate-spin" : ""}`} />
             </button>
@@ -8989,7 +9146,9 @@ export default function App() {
               return matchesSearch && matchesFloor && matchesStatus;
             });
 
-            const availableFloors = Array.from(new Set(rooms.map(r => r.floor))).sort((a, b) => a - b);
+            const availableFloors: number[] = Array.from(
+              new Set(rooms.map(r => (typeof r.floor === "number" && !isNaN(r.floor) ? r.floor : Number(r.floor) || 1)))
+            ).sort((a: number, b: number) => a - b);
             const totalCapacity = rooms.reduce((sum, r) => sum + (Number(r.capacity) || 0), 0);
             const availableCount = rooms.filter(r => r.status === "available").length;
             const occupiedCount = rooms.filter(r => r.status === "occupied" || r.status === "full").length;

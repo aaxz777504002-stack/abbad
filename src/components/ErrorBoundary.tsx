@@ -1,5 +1,6 @@
 import React, { ErrorInfo, ReactNode } from "react";
 import { RefreshCw, Trash2, ShieldAlert } from "lucide-react";
+import { safeLocalStorage as localStorage, safeSessionStorage as sessionStorage } from "../lib/safeStorage";
 
 interface Props {
   children: ReactNode;
@@ -81,8 +82,20 @@ export class ErrorBoundary extends React.Component<Props, State> {
             </div>
 
             {this.state.error && (
-              <div className="bg-slate-950/70 border border-slate-700/60 rounded-xl p-3.5 text-right font-mono text-[11px] text-rose-300 max-h-32 overflow-y-auto" dir="ltr">
-                {this.state.error.toString()}
+              <div className="bg-slate-950/90 border border-slate-700/80 rounded-xl p-3.5 text-left font-mono text-[11px] text-rose-300 max-h-48 overflow-y-auto space-y-2 select-text" dir="ltr">
+                <div className="font-bold text-rose-400">
+                  {this.state.error.name}: {this.state.error.message}
+                </div>
+                {this.state.error.stack && (
+                  <pre className="text-[10px] text-slate-400 whitespace-pre-wrap">
+                    {this.state.error.stack}
+                  </pre>
+                )}
+                {this.state.errorInfo?.componentStack && (
+                  <div className="pt-2 border-t border-slate-800 text-[10px] text-amber-300/80 whitespace-pre-wrap">
+                    {this.state.errorInfo.componentStack}
+                  </div>
+                )}
               </div>
             )}
 

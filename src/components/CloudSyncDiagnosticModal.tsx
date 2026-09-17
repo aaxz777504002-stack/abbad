@@ -230,6 +230,27 @@ export const CloudSyncDiagnosticModal: React.FC<CloudSyncDiagnosticModalProps> =
                     <span>تسجيل الدخول المباشر (Redirect) 🚀</span>
                   </button>
                   <button
+                    onClick={async () => {
+                      try {
+                        await fetch("/api/unblock-cookies", { credentials: "include" });
+                        if (typeof document !== "undefined" && typeof (document as any).requestStorageAccess === "function") {
+                          await (document as any).requestStorageAccess().catch(() => {});
+                        }
+                      } catch (e) {}
+                      handleExecuteRetry();
+                    }}
+                    className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>🔓 فك حظر ملفات التعريف وإعادة المحاولة</span>
+                  </button>
+                  <button
+                    onClick={() => window.open(window.location.href, "_blank")}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>فتح في نافذة مستقلة ↗️</span>
+                  </button>
+                  <button
                     onClick={() => setActiveTab("manual_token")}
                     className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                   >

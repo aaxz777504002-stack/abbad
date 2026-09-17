@@ -106,6 +106,58 @@ const ROOT_CONFIG_FILE = path.join(process.cwd(), "config.json");
 const PUBLIC_CONFIG_FILE = path.join(process.cwd(), "public", "config.json");
 const PUBLIC_DATA_CONFIG_FILE = path.join(process.cwd(), "public", "data", "config.json");
 const PUBLIC_PUBLIC_CONFIG_FILE = path.join(process.cwd(), "public", "public", "config.json");
+const HOTEL_DATA_FILE = path.join(DATA_DIR, "hotel_data.json");
+const PUBLIC_HOTEL_DATA_FILE = path.join(process.cwd(), "public", "data", "hotel_data.json");
+
+// Safe helper to read hotel data (rooms, guests, services, logs)
+function readHotelDataSafely(): Record<string, any> {
+  const candidateFiles = [HOTEL_DATA_FILE, PUBLIC_HOTEL_DATA_FILE];
+  for (const fp of candidateFiles) {
+    try {
+      if (fs.existsSync(fp)) {
+        const raw = fs.readFileSync(fp, "utf8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn(`Warning reading hotel data from ${fp}:`, e);
+    }
+  }
+  return {
+    rooms: [],
+    guests: [],
+    serviceRequests: [],
+    gateLogs: [],
+    updatedAt: new Date().toISOString()
+  };
+}
+
+// Safe helper to write and synchronize hotel data across backend storage
+function writeHotelDataSafely(updated: Record<string, any>): Record<string, any> {
+  const current = readHotelDataSafely();
+  const merged = {
+    ...current,
+    ...updated,
+    updatedAt: new Date().toISOString()
+  };
+  const content = JSON.stringify(merged, null, 2);
+
+  const candidateFiles = [HOTEL_DATA_FILE, PUBLIC_HOTEL_DATA_FILE];
+  for (const fp of candidateFiles) {
+    try {
+      const dir = path.dirname(fp);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(fp, content, "utf8");
+    } catch (e) {
+      console.warn(`Could not sync hotel data to ${fp}:`, e);
+    }
+  }
+  return merged;
+}
 
 // Safe helper to read config from all possible locations with robust fallback
 function readConfigFileSafely(): Record<string, any> {
@@ -183,11 +235,18 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // CORS and Headers middleware for robust API communication in all environments
+  // CORS and Headers middleware for robust API communication and cookie unblocking in all environments
   app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    const origin = req.headers.origin;
+    if (origin) {
+      res.header("Access-Control-Allow-Origin", origin);
+    } else {
+      res.header("Access-Control-Allow-Origin", "*");
+    }
+    res.header("Access-Control-Allow-Credentials", "true");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cookie");
+    res.header("Access-Control-Expose-Headers", "Set-Cookie, *");
     if (req.method === "OPTIONS") {
       return res.sendStatus(200);
     }
@@ -201,6 +260,77 @@ async function startServer() {
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // API Route: Unblock cookies and identification tokens for iframe/preview environments
+  app.get("/api/unblock-cookies", (req, res) => {
+    res.setHeader("Set-Cookie", "hotel_session=unblocked; Path=/; SameSite=None; Secure; Partitioned; Max-Age=2592000");
+    res.json({
+      success: true,
+      status: "unblocked",
+      cookiesAllowed: true,
+      message: "تم فتح حظر ملفات تعريف الارتباط والأذونات السحابية بنجاح!",
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // API Route: Get complete hotel data (rooms, guests, serviceRequests, gateLogs)
+  app.get(["/api/hotel-data", "/data/hotel_data.json"], (req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    try {
+      const data = readHotelDataSafely();
+      res.json({
+        success: true,
+        rooms: data.rooms || [],
+        guests: data.guests || [],
+        serviceRequests: data.serviceRequests || [],
+        gateLogs: data.gateLogs || [],
+        updatedAt: data.updatedAt || new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Failed to read hotel data:", error);
+      res.status(500).json({ error: "Failed to read hotel data" });
+    }
+  });
+
+  // API Route: Save complete hotel data or partial updates
+  app.post("/api/hotel-data", (req, res) => {
+    try {
+      const { rooms, guests, serviceRequests, gateLogs } = req.body;
+      const updatePayload: Record<string, any> = {};
+      if (Array.isArray(rooms)) updatePayload.rooms = rooms;
+      if (Array.isArray(guests)) updatePayload.guests = guests;
+      if (Array.isArray(serviceRequests)) updatePayload.serviceRequests = serviceRequests;
+      if (Array.isArray(gateLogs)) updatePayload.gateLogs = gateLogs;
+
+      const saved = writeHotelDataSafely(updatePayload);
+      res.json({
+        success: true,
+        rooms: saved.rooms,
+        guests: saved.guests,
+        serviceRequests: saved.serviceRequests,
+        gateLogs: saved.gateLogs,
+        updatedAt: saved.updatedAt
+      });
+    } catch (error) {
+      console.error("Failed to save hotel data:", error);
+      res.status(500).json({ error: "Failed to save hotel data" });
+    }
+  });
+
+  // API Route: Reset hotel data to initial rich seed state
+  app.post("/api/hotel-data/reset", (req, res) => {
+    try {
+      let defaultData: any = {};
+      if (fs.existsSync(PUBLIC_HOTEL_DATA_FILE)) {
+        defaultData = JSON.parse(fs.readFileSync(PUBLIC_HOTEL_DATA_FILE, "utf8"));
+      }
+      const reset = writeHotelDataSafely(defaultData);
+      res.json({ success: true, message: "تم إعادة ضبط بيانات الفندق للحالة الافتراضية بنجاح", data: reset });
+    } catch (error) {
+      console.error("Failed to reset hotel data:", error);
+      res.status(500).json({ error: "Failed to reset hotel data" });
+    }
   });
 
   // API Route: Get pending requests
@@ -349,19 +479,6 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-
-    // Serve transformed index.html for all non-API routes in dev mode
-    app.use("*", async (req, res, next) => {
-      const url = req.originalUrl;
-      try {
-        let template = fs.readFileSync(path.resolve(process.cwd(), "index.html"), "utf-8");
-        template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ "Content-Type": "text/html" }).end(template);
-      } catch (e) {
-        vite.ssrFixStacktrace(e as Error);
-        next(e);
-      }
-    });
   } else {
     const distPath = path.resolve(process.cwd(), "dist");
     app.use(express.static(distPath));

@@ -1,0 +1,212 @@
+{
+  "rooms": [
+    {
+      "number": "101",
+      "name": "جناح اليمامة الملكي",
+      "floor": 1,
+      "type": "جناح ملكي (Royal Suite)",
+      "capacity": 4,
+      "status": "occupied",
+      "direction": "إطلالة بحرية",
+      "visitType": "general_1"
+    },
+    {
+      "number": "102",
+      "name": "غرفة الياسمين الراقية",
+      "floor": 1,
+      "type": "غرفة مزدوجة فاخرة (Double)",
+      "capacity": 2,
+      "status": "available",
+      "direction": "إطلالة على المسبح",
+      "visitType": "general_1"
+    },
+    {
+      "number": "103",
+      "name": "غرفة النرجس الهادئة",
+      "floor": 1,
+      "type": "غرفة مفردة (Single)",
+      "capacity": 1,
+      "status": "available",
+      "direction": "إطلالة داخلية",
+      "visitType": "general_1"
+    },
+    {
+      "number": "201",
+      "name": "جناح الريان العائلي",
+      "floor": 2,
+      "type": "جناح عائلي (Family Suite)",
+      "capacity": 6,
+      "status": "available",
+      "direction": "إطلالة على المدينة",
+      "visitType": "general_1"
+    },
+    {
+      "number": "202",
+      "name": "غرفة النخيل الدافئة",
+      "floor": 2,
+      "type": "غرفة مزدوجة فاخرة (Double)",
+      "capacity": 2,
+      "status": "occupied",
+      "direction": "إطلالة بحرية",
+      "visitType": "general_1"
+    },
+    {
+      "number": "203",
+      "name": "غرفة السدرة البسيطة",
+      "floor": 2,
+      "type": "غرفة مفردة (Single)",
+      "capacity": 1,
+      "status": "available",
+      "direction": "إطلالة على المدينة",
+      "visitType": "general_1"
+    },
+    {
+      "number": "301",
+      "name": "جناح الأندلس الفخم",
+      "floor": 3,
+      "type": "جناح ملكي (Royal Suite)",
+      "capacity": 4,
+      "status": "occupied",
+      "direction": "إطلالة بحرية",
+      "visitType": "general_1"
+    },
+    {
+      "number": "302",
+      "name": "غرفة الفيروز المطلة",
+      "floor": 3,
+      "type": "غرفة مزدوجة فاخرة (Double)",
+      "capacity": 2,
+      "status": "available",
+      "direction": "إطلالة على المسبح",
+      "visitType": "general_1"
+    },
+    {
+      "number": "303",
+      "name": "غرفة المرجان الكلاسيكية",
+      "floor": 3,
+      "type": "غرفة مفردة (Single)",
+      "capacity": 1,
+      "status": "available",
+      "direction": "إطلالة داخلية",
+      "visitType": "general_1"
+    },
+    {
+      "number": "401",
+      "name": "جناح القمة البانورامي",
+      "floor": 4,
+      "type": "جناح ملكي (Royal Suite)",
+      "capacity": 4,
+      "status": "available",
+      "direction": "إطلالة بانورامية كاملة",
+      "visitType": "general_1"
+    },
+    {
+      "number": "402",
+      "name": "غرفة الزمرد التنفيذية",
+      "floor": 4,
+      "type": "غرفة مزدوجة فاخرة (Double)",
+      "capacity": 2,
+      "status": "available",
+      "direction": "إطلالة على المدينة",
+      "visitType": "general_1"
+    },
+    {
+      "number": "403",
+      "name": "غرفة اللؤلؤ الهادئة",
+      "floor": 4,
+      "type": "غرفة مفردة (Single)",
+      "capacity": 1,
+      "status": "available",
+      "direction": "إطلالة داخلية",
+      "visitType": "general_1"
+    }
+  ],
+  "guests": [
+    {
+      "id": "G-101",
+      "name": "د. عبد الرحمن بن فهد الشمري",
+      "country": "المملكة العربية السعودية",
+      "mobile": "+966501234567",
+      "whatsapp": "+966501234567",
+      "roomNumber": "101",
+      "status": "resident",
+      "administrativeRole": "رئيس الوفد",
+      "visitType": "general_1",
+      "year": "2026",
+      "checkInDate": "2026-09-15",
+      "photoUrl": "/logo.jpg",
+      "notes": "رئيس الوفد الرسمي - ضيافة ملكية خاصة"
+    },
+    {
+      "id": "G-202",
+      "name": "م. طارق بن خالد المنصور",
+      "country": "دولة الكويت",
+      "mobile": "+96599887766",
+      "whatsapp": "+96599887766",
+      "roomNumber": "202",
+      "status": "resident",
+      "administrativeRole": "نائب رئيس الوفد",
+      "visitType": "general_1",
+      "year": "2026",
+      "checkInDate": "2026-09-16",
+      "photoUrl": "",
+      "notes": "منسق إداري وعضو اللجنة العليا"
+    },
+    {
+      "id": "G-301",
+      "name": "أ. ياسر عبد الله القحطاني",
+      "country": "الإمارات العربية المتحدة",
+      "mobile": "+971501122334",
+      "whatsapp": "+971501122334",
+      "roomNumber": "301",
+      "status": "resident",
+      "administrativeRole": "ضيف شرف (VIP)",
+      "visitType": "general_1",
+      "year": "2026",
+      "checkInDate": "2026-09-16",
+      "photoUrl": "",
+      "notes": "استقبال كبار الضيوف والشخصيات الهامة"
+    }
+  ],
+  "serviceRequests": [
+    {
+      "id": "srv_1",
+      "roomNumber": "101",
+      "guestName": "د. عبد الرحمن بن فهد الشمري",
+      "category": "amenities",
+      "title": "طلب ضيافة واستقبال إضافية",
+      "description": "تجهيز دلال القهوة والشاي والتمر السكري للجناح الملكي",
+      "priority": "urgent",
+      "status": "completed",
+      "createdAt": "2026-09-16T10:00:00.000Z",
+      "year": "2026",
+      "visitType": "general_1"
+    },
+    {
+      "id": "srv_2",
+      "roomNumber": "202",
+      "guestName": "م. طارق بن خالد المنصور",
+      "category": "cleaning",
+      "title": "خدمة تنظيف وتجهيز الغرفة",
+      "description": "تجديد المفارش والمناشف والمستلزمات الفندقية",
+      "priority": "normal",
+      "status": "in_progress",
+      "createdAt": "2026-09-17T08:30:00.000Z",
+      "year": "2026",
+      "visitType": "general_1"
+    }
+  ],
+  "gateLogs": [
+    {
+      "id": "gate_1",
+      "guestId": "G-101",
+      "guestName": "د. عبد الرحمن بن فهد الشمري",
+      "roomNumber": "101",
+      "action": "entry",
+      "timestamp": "2026-09-17T09:15:00.000Z",
+      "operator": "حارس البوابة الرئيسية",
+      "notes": "دخول رسمي مع موكب الوفد"
+    }
+  ],
+  "updatedAt": "2026-09-17T11:49:42.438Z"
+}

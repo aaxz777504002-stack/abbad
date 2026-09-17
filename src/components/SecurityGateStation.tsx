@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { Guest, Room, GateEntryLog, VisitType } from "../types";
 import { playSecurityBeep } from "../lib/securityAudio";
+import { safeLocalStorage as localStorage } from "../lib/safeStorage";
 
 interface SecurityGateStationProps {
   guests: Guest[];

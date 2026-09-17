@@ -8,6 +8,79 @@
     <meta property="og:title" content="خدر ليالي الانس" />
     <meta property="og:description" content="نظام احترافي لإدارة الغرف الفندقية والنزلاء، مدمج مع قوقل شيت وجدول البيانات لإدارة الحجوزات وتسكين النزلاء بكل سهولة." />
     <link rel="icon" type="image/jpeg" href="/logo.jpg" />
+    <script>
+      (function() {
+        function test(type) {
+          try {
+            var s = window[type];
+            if (!s) return false;
+            var k = '__hotel_storage_test__';
+            s.setItem(k, '1');
+            s.removeItem(k);
+            return true;
+          } catch(e) {
+            return false;
+          }
+        }
+        function createMem() {
+          var store = {};
+          return {
+            getItem: function(k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+            setItem: function(k, v) { store[k] = String(v); },
+            removeItem: function(k) { delete store[k]; },
+            clear: function() { store = {}; },
+            key: function(i) { return Object.keys(store)[i] || null; },
+            get length() { return Object.keys(store).length; }
+          };
+        }
+        if (!test('localStorage')) {
+          try {
+            var mem = createMem();
+            var proto = (typeof Window !== 'undefined' && Window.prototype) || (window.Window && window.Window.prototype) || Object.getPrototypeOf(window);
+            if (proto) {
+              try { Object.defineProperty(proto, 'localStorage', { get: function() { return mem; }, configurable: true }); } catch(e) {}
+            }
+            try { Object.defineProperty(window, 'localStorage', { value: mem, configurable: true, writable: true }); } catch(e) {}
+          } catch(e) {}
+        }
+        if (!test('sessionStorage')) {
+          try {
+            var memS = createMem();
+            var protoS = (typeof Window !== 'undefined' && Window.prototype) || (window.Window && window.Window.prototype) || Object.getPrototypeOf(window);
+            if (protoS) {
+              try { Object.defineProperty(protoS, 'sessionStorage', { get: function() { return memS; }, configurable: true }); } catch(e) {}
+            }
+            try { Object.defineProperty(window, 'sessionStorage', { value: memS, configurable: true, writable: true }); } catch(e) {}
+          } catch(e) {}
+        }
+
+        // Unblock cookies & credentials in iframe
+        try {
+          fetch('/api/unblock-cookies', { credentials: 'include' }).catch(function() {});
+          if (typeof document !== 'undefined' && typeof document.requestStorageAccess === 'function') {
+            window.__requestStorageAccess = function() {
+              return document.requestStorageAccess().catch(function() {});
+            };
+          }
+        } catch(e) {}
+
+        // Global diagnostic to prevent blank screen if any unhandled error occurs
+        window.addEventListener('error', function(event) {
+          var root = document.getElementById('root');
+          if (root && (!root.innerHTML || root.innerHTML.trim() === '')) {
+            var err = event.error || {};
+            var msg = err.stack || err.message || event.message || 'خطأ غير معروف';
+            root.innerHTML = '<div style="background:#0f172a;color:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:sans-serif;" dir="rtl">' +
+              '<div style="background:#1e293b;border:1px solid #ef4444;border-radius:16px;padding:24px;max-width:600px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">' +
+              '<h3 style="color:#f87171;font-size:18px;font-weight:bold;margin-top:0;">⚠️ خطأ في تشغيل التطبيق</h3>' +
+              '<p style="color:#cbd5e1;font-size:14px;">تم رصد الخطأ التالي أثناء التحميل:</p>' +
+              '<pre style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;font-size:12px;color:#fca5a5;white-space:pre-wrap;overflow:auto;max-height:240px;">' + msg + '</pre>' +
+              '<button onclick="location.reload()" style="margin-top:16px;padding:10px 20px;background:#ef4444;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;">إعادة المحاولة</button>' +
+              '</div></div>';
+          }
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

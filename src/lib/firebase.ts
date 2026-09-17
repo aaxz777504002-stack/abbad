@@ -18,9 +18,11 @@ import {
   getDocs,
   onSnapshot,
   deleteDoc,
+  setLogLevel,
   Firestore
 } from "firebase/firestore";
 import type { PendingRequest, Room, Guest, ServiceRequest, GateEntryLog } from "../types";
+import { safeLocalStorage as localStorage, safeSessionStorage as sessionStorage } from "./safeStorage";
 import firebaseConfigJson from "../../firebase-applet-config.json";
 import rootConfigJson from "../../config.json";
 
@@ -177,6 +179,26 @@ export const parseAuthError = (error: any): AuthErrorDetails => {
   };
 };
 
+export const DEFAULT_FALLBACK_CONFIG: FirebaseAppConfig = {
+  projectId: "layali-aluns-hotel",
+  appId: "1:123456789012:web:abcdef1234567890abcdef",
+  apiKey: "AIzaSyDummyFallbackKeyForSafeInit123456789",
+  authDomain: "layali-aluns-hotel.firebaseapp.com",
+  storageBucket: "layali-aluns-hotel.appspot.com",
+  messagingSenderId: "123456789012",
+  oAuthClientId: "",
+};
+
+export const isConfigValid = (cfg: Partial<FirebaseAppConfig> | null | undefined): boolean => {
+  return !!(
+    cfg &&
+    typeof cfg.projectId === "string" &&
+    cfg.projectId.trim().length > 0 &&
+    typeof cfg.apiKey === "string" &&
+    cfg.apiKey.trim().length > 0
+  );
+};
+
 export const getFirebaseConfig = (): FirebaseAppConfig => {
   // Check if user set custom config in localStorage
   if (typeof window !== "undefined") {
@@ -184,8 +206,16 @@ export const getFirebaseConfig = (): FirebaseAppConfig => {
       const stored = localStorage.getItem("custom_firebase_config");
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.projectId && parsed.apiKey) {
-          return parsed;
+        if (isConfigValid(parsed)) {
+          return {
+            projectId: parsed.projectId.trim(),
+            appId: parsed.appId || DEFAULT_FALLBACK_CONFIG.appId,
+            apiKey: parsed.apiKey.trim(),
+            authDomain: parsed.authDomain || `${parsed.projectId.trim()}.firebaseapp.com`,
+            storageBucket: parsed.storageBucket || `${parsed.projectId.trim()}.appspot.com`,
+            messagingSenderId: parsed.messagingSenderId || DEFAULT_FALLBACK_CONFIG.messagingSenderId,
+            oAuthClientId: parsed.oAuthClientId || "",
+          };
         }
       }
     } catch (e) {
@@ -195,32 +225,116 @@ export const getFirebaseConfig = (): FirebaseAppConfig => {
 
   const metaEnv = (import.meta as any).env || {};
   const fbConfig = (rootConfigJson as any)?.firebase || rootConfigJson || {};
-  const projectId = metaEnv.VITE_FIREBASE_PROJECT_ID || fbConfig.projectId || firebaseConfigJson.projectId || "";
-  const authDomain = metaEnv.VITE_FIREBASE_AUTH_DOMAIN || fbConfig.authDomain || (projectId ? `${projectId}.firebaseapp.com` : firebaseConfigJson.authDomain);
+  const rawProjectId = metaEnv.VITE_FIREBASE_PROJECT_ID || fbConfig.projectId || (firebaseConfigJson as any)?.projectId || "";
+  const rawApiKey = metaEnv.VITE_FIREBASE_API_KEY || fbConfig.apiKey || (firebaseConfigJson as any)?.apiKey || "";
+
+  const projectId = (typeof rawProjectId === "string" && rawProjectId.trim()) ? rawProjectId.trim() : DEFAULT_FALLBACK_CONFIG.projectId;
+  const apiKey = (typeof rawApiKey === "string" && rawApiKey.trim()) ? rawApiKey.trim() : DEFAULT_FALLBACK_CONFIG.apiKey;
+  const authDomain = metaEnv.VITE_FIREBASE_AUTH_DOMAIN || fbConfig.authDomain || (firebaseConfigJson as any)?.authDomain || (projectId ? `${projectId}.firebaseapp.com` : DEFAULT_FALLBACK_CONFIG.authDomain);
+  const appId = metaEnv.VITE_FIREBASE_APP_ID || fbConfig.appId || (firebaseConfigJson as any)?.appId || DEFAULT_FALLBACK_CONFIG.appId;
+  const storageBucket = metaEnv.VITE_FIREBASE_STORAGE_BUCKET || fbConfig.storageBucket || (firebaseConfigJson as any)?.storageBucket || `${projectId}.appspot.com`;
+  const messagingSenderId = metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || fbConfig.messagingSenderId || (firebaseConfigJson as any)?.messagingSenderId || DEFAULT_FALLBACK_CONFIG.messagingSenderId;
+  const oAuthClientId = metaEnv.VITE_FIREBASE_OAUTH_CLIENT_ID || fbConfig.oAuthClientId || (firebaseConfigJson as any)?.oAuthClientId || "";
 
   return {
     projectId,
-    appId: metaEnv.VITE_FIREBASE_APP_ID || fbConfig.appId || firebaseConfigJson.appId || "",
-    apiKey: metaEnv.VITE_FIREBASE_API_KEY || fbConfig.apiKey || firebaseConfigJson.apiKey || "",
+    appId,
+    apiKey,
     authDomain,
-    storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || fbConfig.storageBucket || firebaseConfigJson.storageBucket || "",
-    messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || fbConfig.messagingSenderId || firebaseConfigJson.messagingSenderId || "",
-    oAuthClientId: metaEnv.VITE_FIREBASE_OAUTH_CLIENT_ID || fbConfig.oAuthClientId || (firebaseConfigJson as any).oAuthClientId || "",
+    storageBucket,
+    messagingSenderId,
+    oAuthClientId,
   };
 };
 
-const activeConfig = getFirebaseConfig();
-export const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(activeConfig);
-export const auth: Auth = getAuth(app);
-export const db: Firestore = getFirestore(app);
+// Safely initialize Firebase App, Auth, Firestore, and Provider without crashing module load
+let appInstance: FirebaseApp | null = null;
+let authInstance: Auth | null = null;
+let dbInstance: Firestore | null = null;
+let providerInstance: GoogleAuthProvider | null = null;
+let firestoreDbAvailable = true;
 
-export const provider = new GoogleAuthProvider();
-// Add required Workspace scopes for Google Sheets and Google Drive (creating & reading spreadsheets)
-provider.addScope("https://www.googleapis.com/auth/spreadsheets");
-provider.addScope("https://www.googleapis.com/auth/drive.file");
-provider.setCustomParameters({
-  prompt: "select_account"
-});
+try {
+  const activeConfig = getFirebaseConfig();
+  if (getApps().length > 0) {
+    appInstance = getApp();
+  } else {
+    appInstance = initializeApp(activeConfig);
+  }
+} catch (e) {
+  console.warn("Firebase initializeApp safe catch:", e);
+  try {
+    if (getApps().length > 0) {
+      appInstance = getApp();
+    } else {
+      appInstance = initializeApp(DEFAULT_FALLBACK_CONFIG, "safe-fallback-app");
+    }
+  } catch (e2) {
+    console.warn("Firebase fallback initializeApp safe catch:", e2);
+  }
+}
+
+if (appInstance) {
+  try {
+    authInstance = getAuth(appInstance);
+  } catch (e) {
+    console.warn("Firebase getAuth safe catch:", e);
+  }
+  try {
+    setLogLevel("silent");
+    dbInstance = getFirestore(appInstance);
+  } catch (e) {
+    console.warn("Firebase getFirestore safe catch:", e);
+  }
+}
+
+try {
+  providerInstance = new GoogleAuthProvider();
+  providerInstance.addScope("https://www.googleapis.com/auth/spreadsheets");
+  providerInstance.addScope("https://www.googleapis.com/auth/drive.file");
+  providerInstance.setCustomParameters({
+    prompt: "select_account"
+  });
+} catch (e) {
+  console.warn("Firebase GoogleAuthProvider safe catch:", e);
+}
+
+// Safe fallback stubs for export so properties can be accessed without throwing TypeError
+const dummyApp: FirebaseApp = {
+  name: "[DEFAULT]",
+  options: DEFAULT_FALLBACK_CONFIG,
+  automaticDataCollectionEnabled: false
+} as unknown as FirebaseApp;
+
+const dummyAuth: Auth = {
+  app: dummyApp,
+  currentUser: null,
+  signOut: async () => {},
+  onAuthStateChanged: () => () => {},
+} as unknown as Auth;
+
+const dummyDb: Firestore = {
+  app: dummyApp,
+  type: "firestore",
+} as unknown as Firestore;
+
+const dummyProvider: GoogleAuthProvider = {
+  addScope: () => dummyProvider,
+  setCustomParameters: () => {}
+} as unknown as GoogleAuthProvider;
+
+export const app: FirebaseApp = appInstance || dummyApp;
+export const auth: Auth = authInstance || dummyAuth;
+export const db: Firestore = dbInstance || dummyDb;
+export const provider: GoogleAuthProvider = providerInstance || dummyProvider;
+
+export const isFirebaseAuthReady = (): boolean => {
+  return !!(authInstance && authInstance.app);
+};
+
+export const isFirebaseFirestoreReady = (): boolean => {
+  return !!(dbInstance && dbInstance.app && firestoreDbAvailable);
+};
 
 let activeSignInPromise: Promise<{ user: User; accessToken: string } | null> | null = null;
 let lastSignInAttempt = 0;
@@ -275,25 +389,44 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      const token = getAccessToken();
-      if (token && !isTokenExpired()) {
-        if (onAuthSuccess) onAuthSuccess(user, token);
+  if (!isFirebaseAuthReady() || !authInstance || typeof onAuthStateChanged !== "function") {
+    console.warn("Firebase Auth not initialized or unavailable in this environment");
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
+  try {
+    return onAuthStateChanged(authInstance, async (user: User | null) => {
+      if (user) {
+        const token = getAccessToken();
+        if (token && !isTokenExpired()) {
+          if (onAuthSuccess) onAuthSuccess(user, token);
+        } else {
+          // If there's a user in Firebase Auth but token is missing/expired
+          if (onAuthFailure) onAuthFailure();
+        }
       } else {
-        // If there's a user in Firebase Auth but token is missing/expired
+        cachedAccessToken = null;
+        cachedTokenExpiry = null;
         if (onAuthFailure) onAuthFailure();
       }
-    } else {
-      cachedAccessToken = null;
-      cachedTokenExpiry = null;
+    }, (err) => {
+      console.warn("onAuthStateChanged error:", err);
       if (onAuthFailure) onAuthFailure();
-    }
-  });
+    });
+  } catch (err) {
+    console.warn("initAuth failed:", err);
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
 };
 
 // Log in / Renew Token with detailed error capture and concurrent promise lock
 export const googleSignIn = async (options?: { preferRedirect?: boolean }): Promise<{ user: User; accessToken: string } | null> => {
+  if (!isFirebaseAuthReady() || !authInstance) {
+    console.warn("Firebase Auth is not available in current environment");
+    return null;
+  }
+
   // If an active popup/sign-in promise is already in flight, reuse it!
   if (activeSignInPromise) {
     return activeSignInPromise;
@@ -303,8 +436,8 @@ export const googleSignIn = async (options?: { preferRedirect?: boolean }): Prom
   const now = Date.now();
   if (now - lastSignInAttempt < 800) {
     const existingToken = getAccessToken();
-    if (existingToken && auth.currentUser) {
-      return { user: auth.currentUser, accessToken: existingToken };
+    if (existingToken && authInstance.currentUser) {
+      return { user: authInstance.currentUser, accessToken: existingToken };
     }
     return null;
   }
@@ -312,8 +445,8 @@ export const googleSignIn = async (options?: { preferRedirect?: boolean }): Prom
 
   // Check if we already have valid session and token
   const currentToken = getAccessToken();
-  if (currentToken && !isTokenExpired() && auth.currentUser) {
-    return { user: auth.currentUser, accessToken: currentToken };
+  if (currentToken && !isTokenExpired() && authInstance.currentUser) {
+    return { user: authInstance.currentUser, accessToken: currentToken };
   }
 
   // If redirect is explicitly requested and we are not restricted inside an iframe
@@ -415,6 +548,10 @@ export const googleSignIn = async (options?: { preferRedirect?: boolean }): Prom
 
 // Sign in via Redirect (Alternative if popup is blocked by browser or mobile)
 export const googleSignInRedirect = async () => {
+  if (!isFirebaseAuthReady() || !authInstance) {
+    console.warn("Firebase Auth is not available in current environment");
+    return;
+  }
   if (isInIframe()) {
     // Cannot redirect inside iframe due to X-Frame-Options on accounts.google.com
     if (typeof window !== "undefined") {
@@ -423,7 +560,8 @@ export const googleSignInRedirect = async () => {
     return;
   }
   try {
-    await signInWithRedirect(auth, provider);
+    const activeProvider = providerInstance || provider;
+    await signInWithRedirect(authInstance, activeProvider);
   } catch (error: any) {
     console.error("Redirect sign in error:", error);
     throw error;
@@ -432,9 +570,12 @@ export const googleSignInRedirect = async () => {
 
 // Check for redirect result upon page reload (with timeout to prevent blocking preview)
 export const checkRedirectResult = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (!isFirebaseAuthReady() || !authInstance || typeof getRedirectResult !== "function") {
+    return null;
+  }
   try {
     const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
-    const result = await Promise.race([getRedirectResult(auth), timeoutPromise]);
+    const result = await Promise.race([getRedirectResult(authInstance), timeoutPromise]);
     if (!result) return null;
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (credential?.accessToken) {
@@ -482,7 +623,9 @@ export const getAccessToken = (): string | null => {
 // Log out
 export const logout = async () => {
   try {
-    await auth.signOut();
+    if (authInstance && typeof authInstance.signOut === "function") {
+      await authInstance.signOut();
+    }
   } catch (e) {
     console.warn("Auth signout error:", e);
   }
@@ -495,25 +638,25 @@ export const logout = async () => {
    and hotel settings sync directly with zero config friction.
    ========================================================================= */
 
-let firestoreDbAvailable = true;
+const handleFirestoreError = (err: any, opName: string) => {
+  firestoreDbAvailable = false;
+  console.warn(`Firestore [${opName}] fallback active:`, err?.message || err);
+};
 
 /**
  * Save or update a guest pending self-registration request to Firestore
  */
 export const savePendingRequestToFirestore = async (request: PendingRequest): Promise<boolean> => {
-  if (!firestoreDbAvailable) return false;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {
-    const docRef = doc(db, "pending_requests", request.id);
+    const docRef = doc(dbInstance, "pending_requests", request.id);
     await setDoc(docRef, {
       ...request,
       updatedAt: new Date().toISOString()
     }, { merge: true });
     return true;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore savePendingRequest warning:", err);
+    handleFirestoreError(err, "savePendingRequest");
     return false;
   }
 };
@@ -522,16 +665,13 @@ export const savePendingRequestToFirestore = async (request: PendingRequest): Pr
  * Delete a pending request from Firestore (e.g. after approval or rejection)
  */
 export const deletePendingRequestFromFirestore = async (id: string): Promise<boolean> => {
-  if (!firestoreDbAvailable) return false;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {
-    const docRef = doc(db, "pending_requests", id);
+    const docRef = doc(dbInstance, "pending_requests", id);
     await deleteDoc(docRef);
     return true;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore deletePendingRequest warning:", err);
+    handleFirestoreError(err, "deletePendingRequest");
     return false;
   }
 };
@@ -540,11 +680,11 @@ export const deletePendingRequestFromFirestore = async (id: string): Promise<boo
  * Fetch all pending requests from Firestore once (with timeout)
  */
 export const fetchPendingRequestsFromFirestore = async (): Promise<PendingRequest[]> => {
-  if (!firestoreDbAvailable) return [];
+  if (!isFirebaseFirestoreReady() || !dbInstance) return [];
   try {
-    const coll = collection(db, "pending_requests");
+    const coll = collection(dbInstance, "pending_requests");
     const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error("Firestore fetch timeout")), 1200)
+      setTimeout(() => reject(new Error("Firestore fetch timeout")), 1000)
     );
     const snapshot = await Promise.race([getDocs(coll), timeoutPromise]);
     const list: PendingRequest[] = [];
@@ -555,10 +695,7 @@ export const fetchPendingRequestsFromFirestore = async (): Promise<PendingReques
     list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id));
     return list;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore fetchPendingRequests warning/timeout:", err);
+    handleFirestoreError(err, "fetchPendingRequests");
     return [];
   }
 };
@@ -571,10 +708,11 @@ export const subscribeToPendingRequests = (
   onData: (requests: PendingRequest[]) => void,
   onError?: (err: any) => void
 ): (() => void) => {
-  if (!firestoreDbAvailable) return () => {};
+  if (!isFirebaseFirestoreReady() || !dbInstance) return () => {};
   try {
-    const coll = collection(db, "pending_requests");
-    return onSnapshot(coll, (snapshot) => {
+    const coll = collection(dbInstance, "pending_requests");
+    let unsub: (() => void) | null = null;
+    unsub = onSnapshot(coll, (snapshot) => {
       const list: PendingRequest[] = [];
       snapshot.forEach((d) => {
         const data = d.data() as PendingRequest;
@@ -583,17 +721,19 @@ export const subscribeToPendingRequests = (
       list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.id.localeCompare(a.id));
       onData(list);
     }, (err) => {
-      if (err?.message?.includes("not found") || err?.code === "not-found") {
-        firestoreDbAvailable = false;
+      handleFirestoreError(err, "subscribeToPendingRequests snapshot");
+      if (unsub) {
+        try { unsub(); } catch {}
       }
-      console.warn("Firestore subscribeToPendingRequests snapshot error:", err);
       if (onError) onError(err);
     });
+    return () => {
+      if (unsub) {
+        try { unsub(); } catch {}
+      }
+    };
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore subscribeToPendingRequests init warning:", err);
+    handleFirestoreError(err, "subscribeToPendingRequests init");
     if (onError) onError(err);
     return () => {};
   }
@@ -603,16 +743,13 @@ export const subscribeToPendingRequests = (
  * Save hotel global config (e.g., registrationLinkStatus: "open" | "closed")
  */
 export const saveHotelConfigToFirestore = async (cfg: { registrationLinkStatus?: string; hotelName?: string }): Promise<boolean> => {
-  if (!firestoreDbAvailable) return false;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {
-    const docRef = doc(db, "config", "hotel_settings");
+    const docRef = doc(dbInstance, "config", "hotel_settings");
     await setDoc(docRef, { ...cfg, updatedAt: new Date().toISOString() }, { merge: true });
     return true;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore saveHotelConfig warning:", err);
+    handleFirestoreError(err, "saveHotelConfig");
     return false;
   }
 };
@@ -623,24 +760,27 @@ export const saveHotelConfigToFirestore = async (cfg: { registrationLinkStatus?:
 export const subscribeToHotelConfig = (
   onData: (cfg: { registrationLinkStatus?: string; hotelName?: string }) => void
 ): (() => void) => {
-  if (!firestoreDbAvailable) return () => {};
+  if (!isFirebaseFirestoreReady() || !dbInstance) return () => {};
   try {
-    const docRef = doc(db, "config", "hotel_settings");
-    return onSnapshot(docRef, (snap) => {
+    const docRef = doc(dbInstance, "config", "hotel_settings");
+    let unsub: (() => void) | null = null;
+    unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         onData(snap.data() as any);
       }
     }, (err) => {
-      if (err?.message?.includes("not found") || err?.code === "not-found") {
-        firestoreDbAvailable = false;
+      handleFirestoreError(err, "subscribeToHotelConfig snapshot");
+      if (unsub) {
+        try { unsub(); } catch {}
       }
-      console.warn("Firestore subscribeToHotelConfig snapshot error:", err);
     });
+    return () => {
+      if (unsub) {
+        try { unsub(); } catch {}
+      }
+    };
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore subscribeToHotelConfig init warning:", err);
+    handleFirestoreError(err, "subscribeToHotelConfig init");
     return () => {};
   }
 };
@@ -649,11 +789,11 @@ export const subscribeToHotelConfig = (
  * Fetch hotel config once (with timeout)
  */
 export const fetchHotelConfigFromFirestore = async (): Promise<{ registrationLinkStatus?: string; hotelName?: string } | null> => {
-  if (!firestoreDbAvailable) return null;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return null;
   try {
-    const docRef = doc(db, "config", "hotel_settings");
+    const docRef = doc(dbInstance, "config", "hotel_settings");
     const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error("Firestore config fetch timeout")), 1200)
+      setTimeout(() => reject(new Error("Firestore config fetch timeout")), 1000)
     );
     const snap = await Promise.race([getDoc(docRef), timeoutPromise]);
     if (snap.exists()) {
@@ -661,10 +801,7 @@ export const fetchHotelConfigFromFirestore = async (): Promise<{ registrationLin
     }
     return null;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore fetchHotelConfig warning/timeout:", err);
+    handleFirestoreError(err, "fetchHotelConfig");
     return null;
   }
 };
@@ -678,19 +815,16 @@ export const saveHotelFullStateToFirestore = async (data: {
   serviceRequests?: ServiceRequest[];
   gateLogs?: GateEntryLog[];
 }): Promise<boolean> => {
-  if (!firestoreDbAvailable) return false;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {
-    const docRef = doc(db, "config", "hotel_live_data");
+    const docRef = doc(dbInstance, "config", "hotel_live_data");
     await setDoc(docRef, {
       ...data,
       lastSyncedAt: new Date().toISOString()
     }, { merge: true });
     return true;
   } catch (err: any) {
-    if (err?.message?.includes("not found") || err?.code === "not-found") {
-      firestoreDbAvailable = false;
-    }
-    console.warn("Firestore saveHotelFullState warning:", err);
+    handleFirestoreError(err, "saveHotelFullState");
     return false;
   }
 };
@@ -704,16 +838,16 @@ export const fetchHotelFullStateFromFirestore = async (): Promise<{
   serviceRequests?: ServiceRequest[];
   gateLogs?: GateEntryLog[];
 } | null> => {
-  if (!firestoreDbAvailable) return null;
+  if (!isFirebaseFirestoreReady() || !dbInstance) return null;
   try {
-    const docRef = doc(db, "config", "hotel_live_data");
+    const docRef = doc(dbInstance, "config", "hotel_live_data");
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       return snap.data() as any;
     }
     return null;
-  } catch (err) {
-    console.warn("Firestore fetchHotelFullState warning:", err);
+  } catch (err: any) {
+    handleFirestoreError(err, "fetchHotelFullState");
     return null;
   }
 };
