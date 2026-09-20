@@ -109,6 +109,7 @@ import {
 } from "./lib/firebase";
 import { VercelAuthHelpModal } from "./components/VercelAuthHelpModal";
 import { CloudSyncDiagnosticModal } from "./components/CloudSyncDiagnosticModal";
+import { AvailableRoomAssigner } from "./components/AvailableRoomAssigner";
 import { 
   findOrCreateSpreadsheet, 
   validateAndConnectSpreadsheet,
@@ -8857,51 +8858,48 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 mb-2">تعيين الغرفة الفندقية المتاحة *</label>
-                      <select 
-                        required
-                        value={checkInForm.roomNumber}
-                        onChange={e => setCheckInForm({ ...checkInForm, roomNumber: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-sm outline-none transition"
-                      >
-                        <option value="">-- اختر الغرفة المتاحة --</option>
-                        {rooms
-                          .filter(r => r.status === "available")
-                          .map(r => (
-                            <option key={r.number} value={r.number}>
-                              الغرفة {r.number} - {r.name} ({r.type})
-                            </option>
-                          ))}
-                      </select>
-                      {rooms.filter(r => r.status === "available").length === 0 && (
-                        <p className="text-xs text-rose-500 mt-2 flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5" /> عذراً، لا توجد أي غرف متاحة بالكامل للتسكين حالياً.
-                        </p>
+                  {/* ==================== تعيين الغرفة الفندقية المتاحة - تصميم منضبط، مرتب، واحترافي ==================== */}
+                  <AvailableRoomAssigner
+                    rooms={rooms}
+                    selectedRoomNumber={checkInForm.roomNumber}
+                    onSelectRoom={(roomNum) => setCheckInForm({ ...checkInForm, roomNumber: roomNum })}
+                    guests={guests}
+                    required={true}
+                    label="تعيين الغرفة الفندقية المتاحة"
+                  />
+
+                  {/* تاريخ ويوم وصول النزيل - تنظيم منضبط وواضح */}
+                  <div className="bg-slate-50/90 p-4 rounded-2xl border border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <label className="text-xs font-black text-slate-700 flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-emerald-700" />
+                        <span>تاريخ ويوم وصول النزيل * <span className="text-emerald-700 font-normal">(إلزامي)</span></span>
+                      </label>
+                      {checkInForm.checkInDate && (
+                        <span className="text-xs bg-emerald-100 text-emerald-800 px-3 py-1 rounded-lg border border-emerald-300 font-black shadow-2xs">
+                          يوم {getArabicDayName(checkInForm.checkInDate)}
+                        </span>
                       )}
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 mb-2 flex items-center justify-between">
-                        <span>تاريخ ويوم وصول النزيل * <span className="text-emerald-700 font-normal">(إلزامي)</span></span>
-                        {checkInForm.checkInDate && (
-                          <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded border border-emerald-200 font-bold">
-                            يوم {getArabicDayName(checkInForm.checkInDate)}
-                          </span>
-                        )}
-                      </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                       <input 
                         type="date" 
                         required
                         value={checkInForm.checkInDate}
                         onChange={e => setCheckInForm({ ...checkInForm, checkInDate: e.target.value })}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-sm outline-none transition"
+                        className="w-full bg-white border-2 border-slate-200 focus:border-emerald-600 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 outline-none transition shadow-2xs"
                       />
-                      {checkInForm.checkInDate && (
-                        <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-                          📅 يوم الوصول: <strong className="text-emerald-700">يوم {getArabicDayName(checkInForm.checkInDate)} الموافق {checkInForm.checkInDate}</strong>
-                        </p>
+
+                      {checkInForm.checkInDate ? (
+                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-slate-700 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            موعد الوصول: <strong className="text-emerald-800 font-black">يوم {getArabicDayName(checkInForm.checkInDate)} الموافق {checkInForm.checkInDate}</strong>
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400 font-medium">حدد تاريخ وصول النزيل لاستكمال إجراءات التسكين</p>
                       )}
                     </div>
                   </div>
@@ -11406,13 +11404,19 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">رقم الغرفة</label>
-                  <input
-                    type="text"
+                  <label className="block text-xs font-bold text-slate-700 mb-1">تعيين / نقل إلى غرفة فندقية</label>
+                  <select
                     value={editGuestForm.roomNumber}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, roomNumber: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
-                  />
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none"
+                  >
+                    <option value="">-- اختر الغرفة --</option>
+                    {rooms.map(r => (
+                      <option key={r.number} value={r.number}>
+                        غرفة {r.number} - {r.name || r.type} (الطابق {r.floor} | {r.status === "available" ? "شاغرة" : "مشغولة"})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">الدولة والجنسية</label>
