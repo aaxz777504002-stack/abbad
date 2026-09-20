@@ -776,14 +776,20 @@ export default function App() {
     };
   });
 
-  const [editingVisitType, setEditingVisitType] = useState<VisitType | null>(null);
-  const [editVisitForm, setEditVisitForm] = useState<{ title: string; subtitle: string; startDate: string; endDate: string; notes: string }>({
-    title: "",
-    subtitle: "",
-    startDate: "",
-    endDate: "",
-    notes: ""
+  // Active / Enabled Visits List (نطاقات الزيارات المفعلة المتاحة)
+  const [enabledVisits, setEnabledVisits] = useState<VisitType[]>(() => {
+    const saved = localStorage.getItem("hotel_enabled_visits");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
+    }
+    return ["general_1", "general_2", "private"];
   });
+
+  // In-app Modal Confirmation State for Deleting Years
+  const [yearToDelete, setYearToDelete] = useState<string | null>(null);
 
   // Tools Sub Navigation Tab Filter
   const [toolsActiveFilter, setToolsActiveFilter] = useState<"all" | "app_logo" | "guest_card" | "passwords" | "years_visits" | "database" | "barcode" | "backup" | "requests">("all");
@@ -2822,29 +2828,25 @@ export default function App() {
     triggerNotification("success", `تم تغيير حالة رابط التسجيل إلى: ${nextStatus ? "مفتوح" : "مغلق"}`);
   };
 
-  // DATA FILTERING & SEGREGATION PER VISIT TYPE AND OPERATIONAL YEAR
-  // الزيارة العامة الأولى والزيارة العامة الثانية والزيارة الخاصة - أرقام وأرشيف منفصل بدون تداخل
+  // DATA FILTERING PER OPERATIONAL YEAR
   const filteredGuests = guests.filter(g => {
     const matchYear = !g.year || g.year === selectedYear;
-    const matchVisit = !g.visitType || g.visitType === selectedVisitType || (selectedVisitType === "general_1" && !g.visitType);
-    return matchYear && matchVisit;
+    return matchYear;
   });
 
   const filteredServiceRequests = serviceRequests.filter(s => {
     const matchYear = !s.year || s.year === selectedYear;
-    const matchVisit = !s.visitType || s.visitType === selectedVisitType || (selectedVisitType === "general_1" && !s.visitType);
-    return matchYear && matchVisit;
+    return matchYear;
   });
 
   const filteredPendingRequests = pendingRequests.filter(p => {
     const matchYear = !p.year || p.year === selectedYear;
-    const matchVisit = !p.visitType || p.visitType === selectedVisitType || (selectedVisitType === "general_1" && !p.visitType);
-    return matchYear && matchVisit;
+    return matchYear;
   });
 
-  // Calculate isolated room occupancy for active visit and year
+  // Calculate room occupancy for active operational year
   const activeResidentRoomNumbers = new Set(filteredGuests.filter(g => g.status === "resident").map(g => g.roomNumber));
-  const occupiedRoomsCount = rooms.filter(r => activeResidentRoomNumbers.has(r.number) || (selectedVisitType === "general_1" && (r.status === "occupied" || r.status === "full"))).length;
+  const occupiedRoomsCount = rooms.filter(r => activeResidentRoomNumbers.has(r.number) || r.status === "occupied" || r.status === "full").length;
   const availableRoomsCount = Math.max(0, rooms.length - occupiedRoomsCount);
 
   // Stats Calculations for active visit scope & year
@@ -3071,10 +3073,9 @@ export default function App() {
   };
 
   const handleDeleteServiceRequest = (id: string) => {
-    if (!window.confirm("هل أنت أصلًا متأكد من حذف طلب الخدمة هذا؟")) return;
     const updated = serviceRequests.filter(sr => sr.id !== id);
     persistServiceRequests(updated);
-    triggerNotification("success", "تم حذف طلب الخدمة.");
+    triggerNotification("success", "تم حذف طلب الخدمة بنجاح. 🗑️");
   };
 
   // PERMISSIONS HANDLER (صلاحيات المستخدمين)
@@ -3636,28 +3637,31 @@ export default function App() {
     triggerNotification("success", `تم تعديل مسمى الموسم بنجاح من (${oldYear}) إلى (${newYear}) وتحديث كافة السجلات المرتبطة.`);
   };
 
-  // DELETE YEAR / SEASON
-  const handleDeleteYear = (yearToDelete: string) => {
+  // PROMPT DELETE YEAR / SEASON (يفتح نافذة التأكيد الآمنة داخل التطبيق بدون نوافذ المتصفح المحظورة في الـ iframe)
+  const handleDeleteYear = (yearToDel: string) => {
     if (yearsList.length <= 1) {
       triggerNotification("error", "لا يمكن حذف الموسم الوحيد المتبقي في النظام.");
       return;
     }
-    const yrGuestsCount = guests.filter(g => g.year === yearToDelete || (!g.year && yearToDelete === "2026")).length;
-    const confirmMsg = yrGuestsCount > 0
-      ? `⚠️ تأكيد حذف الموسم (${yearToDelete}):\n\nيوجد حالياً (${yrGuestsCount}) سجل نزلاء مرتبطين بهذا الموسم.\nهل ترغب بحذف هذا الموسم من قائمة المواسم؟ (ستبقى سجلات النزلاء محفوظة في النظام ولكن سيتم نقل الموسم النشط لموسم آخر)`
-      : `هل أنت متأكد من حذف الموسم (${yearToDelete}) من قائمة السنوات والمواسم؟`;
+    setYearToDelete(yearToDel);
+  };
 
-    if (!window.confirm(confirmMsg)) {
+  // EXECUTE DELETE YEAR / SEASON
+  const executeDeleteYear = (yearToDel: string) => {
+    if (yearsList.length <= 1) {
+      triggerNotification("error", "لا يمكن حذف الموسم الوحيد المتبقي في النظام.");
+      setYearToDelete(null);
       return;
     }
-    const updated = yearsList.filter(y => y !== yearToDelete);
+    const updated = yearsList.filter(y => y !== yearToDel);
     setYearsList(updated);
     localStorage.setItem("hotel_years_list", JSON.stringify(updated));
-    if (selectedYear === yearToDelete) {
+    if (selectedYear === yearToDel) {
       setSelectedYear(updated[0]);
       localStorage.setItem("selected_year", updated[0]);
     }
-    triggerNotification("success", `تم حذف الموسم (${yearToDelete}) بنجاح.`);
+    setYearToDelete(null);
+    triggerNotification("success", `تم حذف الموسم (${yearToDel}) بنجاح من قائمة المواسم والسنوات. 🗑️`);
   };
 
   // VISIT TYPE HANDLER (الزيارة العامة الأولى، الزيارة العامة الثانية، والزيارة الخاصة)
@@ -3668,122 +3672,44 @@ export default function App() {
     triggerNotification("success", `تم تفعيل وتحديد نطاق الزيارة: ${visitName} - البيانات والأرقام منفصلة تماماً بدون تداخل.`);
   };
 
-  // SAVE VISIT CUSTOMIZATION SETTINGS
-  const handleSaveVisitSettings = (visitId: VisitType) => {
-    const updated = {
-      ...visitSettings,
-      [visitId]: { ...editVisitForm }
-    };
-    setVisitSettings(updated);
-    localStorage.setItem("hotel_visit_settings", JSON.stringify(updated));
-    setEditingVisitType(null);
-    triggerNotification("success", `تم حفظ تخصيص وإعدادات (${updated[visitId].title}) بنجاح! 💾`);
-  };
-
-  // DELETE OR RESET VISIT SCOPE DATA
-  const handleDeleteOrResetVisit = (visitId: VisitType) => {
-    const visitName = visitSettings[visitId]?.title || visitId;
-    const vGuestsCount = guests.filter(g => (g.visitType || "general_1") === visitId).length;
-    const vServicesCount = serviceRequests.filter(s => (s.visitType || "general_1") === visitId).length;
-
-    const confirmMsg = `⚠️ تأكيد حذف وتصفير سجلات (${visitName}):\n\n- عدد النزلاء المرتبطين بهذه الزيارة: ${vGuestsCount}\n- طلبات الخدمات المرتبطة: ${vServicesCount}\n\nسيتم حذف سجلات النزلاء والطلبات الخاصة بهذه الزيارة بالكامل، وإعادة تعيين مسمياتها وتواريخها للافتراضي.\n\nهل ترغب بالمتابعة بالتأكيد؟`;
-
-    if (!window.confirm(confirmMsg)) {
-      return;
-    }
-
-    // Filter out guests for this visit
-    const remainingGuests = guests.filter(g => (g.visitType || "general_1") !== visitId);
-    persistGuests(remainingGuests);
-
-    // Filter out service requests for this visit
-    const remainingServices = serviceRequests.filter(s => (s.visitType || "general_1") !== visitId);
-    setServiceRequests(remainingServices);
-    localStorage.setItem("hotel_service_requests", JSON.stringify(remainingServices));
-
-    // Reset visit settings to default
-    const defaultSettings: Record<VisitType, { title: string; subtitle: string; startDate: string; endDate: string; notes: string }> = {
-      general_1: {
-        title: "الزيارة العامة الأولى",
-        subtitle: "الزيارة الكبيرة الأولى",
-        startDate: "",
-        endDate: "",
-        notes: "نطاق الزيارة العامة الأولى للموسم التشغيلي"
-      },
-      general_2: {
-        title: "الزيارة العامة الثانية",
-        subtitle: "الزيارة الكبيرة الثانية",
-        startDate: "",
-        endDate: "",
-        notes: "نطاق الزيارة العامة الثانية للموسم التشغيلي"
-      },
-      private: {
-        title: "الزيارة الخاصة",
-        subtitle: "قسم النزلاء الخاص والمنفصل",
-        startDate: "",
-        endDate: "",
-        notes: "نطاق الزيارة الخاصة المنفصلة"
-      }
-    };
-
-    const updated = {
-      ...visitSettings,
-      [visitId]: defaultSettings[visitId]
-    };
-    setVisitSettings(updated);
-    localStorage.setItem("hotel_visit_settings", JSON.stringify(updated));
-
-    triggerNotification("success", `تم حذف وتصفير سجلات وإعدادات (${visitName}) بنجاح! 🗑️`);
-  };
-
-  // RESET ROOMS OCCUPANCY FOR NEW VISIT/SEASON (تصفير وتفريغ حالة الغرف لبدء زيارة جديدة بدون مسح سجلات النزلاء القديمة)
+  // RESET ROOMS OCCUPANCY FOR NEW SEASON (تصفير وتفريغ حالة الغرف لبدء موسم جديد بدون مسح سجلات النزلاء القديمة)
   const handleResetRoomsForNewVisit = () => {
-    const currentVisitName = visitSettings[selectedVisitType]?.title || selectedVisitType;
-    if (!window.confirm(`⚠️ تأكيد تفريغ الغرف لبدء زيارة أو موسم جديد:\n\nسيتم إعادة حالة جميع الغرف إلى (متاحة - available) لاستقبال أفواج جديدة.\nسجلات النزلاء والمغادرين السابقة ستبقى محفوظة بالكامل ومفهرسة بأمان.\n\nهل ترغب بالمتابعة؟`)) {
-      return;
-    }
-
     const resetRoomsList: Room[] = rooms.map(r => ({
       ...r,
       status: "available"
     }));
 
     persistRooms(resetRoomsList);
-    triggerNotification("success", `تم تفريغ وتهيئة جميع الغرف لتصبح جاهزة لاستقبال النزلاء في (${currentVisitName} - موسم ${selectedYear})! ✨`);
+    triggerNotification("success", `تم تفريغ وتهيئة جميع الغرف لتصبح جاهزة لاستقبال النزلاء في موسم ${selectedYear}! ✨`);
   };
 
-  // MIGRATE / TRANSFER GUESTS ACROSS VISITS OR YEARS (ترحيل ونقل السجلات بين الزيارات أو السنوات)
+  // MIGRATE / TRANSFER GUESTS ACROSS OPERATIONAL YEARS (ترحيل ونقل السجلات بين المواسم التشغيلية)
   const handleMigrateGuests = () => {
-    if (migrationSourceVisit === migrationTargetVisit && migrationSourceYear === migrationTargetYear) {
-      triggerNotification("error", "النطاق المصدر والهدف متطابقان. يرجى اختيار زيارة أو سنة مختلفة للنقل إليها.");
+    if (migrationSourceYear === migrationTargetYear) {
+      triggerNotification("error", "الموسم المصدر والهدف متطابقان. يرجى اختيار موسم مختلف للنقل إليه.");
       return;
     }
 
-    const sourceGuests = guests.filter(g => (!g.year || g.year === migrationSourceYear) && (!g.visitType || g.visitType === migrationSourceVisit || (migrationSourceVisit === "general_1" && !g.visitType)));
+    const sourceGuests = guests.filter(g => (!g.year && migrationSourceYear === "2026") || g.year === migrationSourceYear);
 
     if (sourceGuests.length === 0) {
-      triggerNotification("error", `لا يوجد أي نزلاء مسجلين في (موسم ${migrationSourceYear} - ${visitSettings[migrationSourceVisit]?.title || migrationSourceVisit}) لنقلهم.`);
-      return;
-    }
-
-    if (!window.confirm(`هل أنت متأكد من ترحيل ونقل عدد (${sourceGuests.length}) نزيل من (${visitSettings[migrationSourceVisit]?.title} - ${migrationSourceYear}) إلى (${visitSettings[migrationTargetVisit]?.title} - ${migrationTargetYear})؟`)) {
+      triggerNotification("error", `لا يوجد أي نزلاء مسجلين في (موسم ${migrationSourceYear}) لنقلهم.`);
       return;
     }
 
     const updatedGuests = guests.map(g => {
-      const match = (!g.year || g.year === migrationSourceYear) && (!g.visitType || g.visitType === migrationSourceVisit || (migrationSourceVisit === "general_1" && !g.visitType));
+      const match = (!g.year && migrationSourceYear === "2026") || g.year === migrationSourceYear;
       if (match) {
         return {
           ...g,
-          year: migrationTargetYear,
-          visitType: migrationTargetVisit
+          year: migrationTargetYear
         };
       }
       return g;
     });
 
     persistGuests(updatedGuests);
-    triggerNotification("success", `تم ترحيل (${sourceGuests.length}) نزيل بنجاح إلى (${visitSettings[migrationTargetVisit]?.title} - موسم ${migrationTargetYear})! 🔄`);
+    triggerNotification("success", `تم ترحيل (${sourceGuests.length}) نزيل بنجاح إلى موسم ${migrationTargetYear}! 🔄`);
   };
 
   // CHECK-IN GUEST ACTION (MANAGER DASHBOARD)
@@ -5531,52 +5457,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* ==================== DUAL SECTION GUEST DATA BAR (شريط الفصل المباشر بين بيانات النزلاء العامة وبيانات النزلاء الخاصة) ==================== */}
-        <div className="bg-slate-900 border-b border-slate-800 px-6 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3 text-white">
-          <div className="flex items-center gap-2 text-xs font-extrabold">
-            <span className="text-slate-400 font-medium">القسم والبيانات النشطة:</span>
-            {selectedVisitType === "private" ? (
-              <span className="px-3 py-1 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5" />
-                🔒 قسم بيانات النزلاء الخاصة (منفصلة كلياً)
-              </span>
-            ) : (
-              <span className="px-3 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5" />
-                🏛️ قسم بيانات النزلاء العامة ({selectedVisitType === "general_2" ? "الزيارة العامة الثانية" : "الزيارة العامة الأولى"})
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 bg-slate-950/80 p-1 rounded-xl border border-slate-800 shadow-inner">
-            <button
-              type="button"
-              onClick={() => handleVisitTypeChange("general_1")}
-              className={`px-4 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
-                selectedVisitType !== "private" 
-                  ? "bg-emerald-600 text-white shadow" 
-                  : "text-slate-400 hover:text-white hover:bg-slate-800"
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5 text-emerald-300" />
-              قسم البيانات العامة (عامة)
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleVisitTypeChange("private")}
-              className={`px-4 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
-                selectedVisitType === "private" 
-                  ? "bg-amber-500 text-slate-950 shadow font-black" 
-                  : "text-slate-400 hover:text-white hover:bg-slate-800"
-              }`}
-            >
-              <Lock className="w-3.5 h-3.5" />
-              قسم البيانات الخاصة (خاصة)
-            </button>
-          </div>
-        </div>
-
         {/* Reactive Toast Notification banner */}
         <AnimatePresence>
           {showNotification && (
@@ -5615,53 +5495,49 @@ export default function App() {
           {activeTab === "dashboard" && (
             <div className="space-y-8">
 
-              {/* Top Banner: Visit Scope & Season Control Bar */}
+              {/* Top Banner: Hotel Management & Active Season Control */}
               <div className="bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 border border-emerald-800/60 p-5 rounded-3xl shadow-xl text-white flex flex-col md:flex-row items-center justify-between gap-5 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2"></div>
                 
                 <div className="flex items-center gap-4 z-10">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-400/20 border border-amber-400/40 text-amber-300 flex items-center justify-center font-black shrink-0 shadow-inner">
-                    <ShieldCheck className="w-7 h-7" />
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center font-black shrink-0 shadow-inner">
+                    <Building2 className="w-7 h-7 text-emerald-400" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <h2 className="font-black text-base sm:text-lg text-amber-300">
-                        {selectedVisitType === "general_1" && "الزيارة العامة الأولى (الزيارة الكبيرة الأولى)"}
-                        {selectedVisitType === "general_2" && "الزيارة العامة الثانية (الزيارة الكبيرة الثانية)"}
-                        {selectedVisitType === "private" && "الزيارة الخاصة (منفصلة ومحمية)"}
+                      <h2 className="font-black text-base sm:text-lg text-emerald-300">
+                        نظام إدارة وتشغيل الفندق الموحد
                       </h2>
-                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-extrabold tracking-wide">
-                        موسم {selectedYear}
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-300 text-xs font-extrabold tracking-wide">
+                        الموسم النشط: {selectedYear}
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                      نظام البيانات المعزول: تم فصل أرشيف وسجلات النزلاء والخدمات لهذا النطاق بالكامل.
+                      إدارة متكاملة وشاملة لبيانات النزلاء، الغرف، والخدمات الفندقية
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 self-stretch md:self-auto justify-end flex-wrap z-10">
-                  <button
-                    type="button"
-                    onClick={() => handleVisitTypeChange("general_1")}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 ${selectedVisitType === "general_1" ? "bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30 scale-105" : "bg-slate-800/90 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"}`}
-                  >
-                    <span>الزيارة العامة 1</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleVisitTypeChange("general_2")}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 ${selectedVisitType === "general_2" ? "bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30 scale-105" : "bg-slate-800/90 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"}`}
-                  >
-                    <span>الزيارة العامة 2</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleVisitTypeChange("private")}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 ${selectedVisitType === "private" ? "bg-amber-400 text-slate-950 shadow-md shadow-amber-950/30 scale-105" : "bg-slate-800/90 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"}`}
-                  >
-                    <span>الزيارة الخاصة 🔒</span>
-                  </button>
+                  <span className="text-xs text-slate-400 font-bold ml-1">تبديل الموسم:</span>
+                  {yearsList.map((yr) => {
+                    const isSelected = selectedYear === yr;
+                    return (
+                      <button
+                        key={yr}
+                        type="button"
+                        onClick={() => handleYearChange(yr)}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? "bg-emerald-500 text-slate-950 shadow-md font-black scale-105"
+                            : "bg-slate-800/90 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700"
+                        }`}
+                      >
+                        <Calendar className="w-3 h-3" />
+                        <span>موسم {yr}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -6562,7 +6438,7 @@ export default function App() {
                           <tr>
                             <td colSpan={8} className="text-center py-12 text-slate-400">
                               <Users className="w-12 h-12 mx-auto text-slate-200 mb-2" />
-                              <p>لا يوجد نزلاء مسجلين يطابقون شروط البحث في هذه الزيارة</p>
+                              <p>لا يوجد نزلاء مسجلين يطابقون شروط البحث في هذا الموسم</p>
                             </td>
                           </tr>
                         ) : (
@@ -7988,7 +7864,7 @@ export default function App() {
                     <Users className="w-5 h-5 text-emerald-400" />
                   </div>
                   <h4 className="text-2xl font-black">{filteredGuests.length}</h4>
-                  <p className="text-[10px] text-emerald-300/80 mt-1">المسجلون في هذه الزيارة</p>
+                  <p className="text-[10px] text-emerald-300/80 mt-1">المسجلون في هذا الموسم</p>
                 </div>
 
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
@@ -7999,7 +7875,7 @@ export default function App() {
                   <h4 className="text-2xl font-black text-slate-800">
                     {filteredGuests.filter(g => g.status === "resident").length}
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-1">مسكنين حالياً بالزيارة النشطة</p>
+                  <p className="text-[10px] text-slate-400 mt-1">مسكنين حالياً بالموسم النشط</p>
                 </div>
 
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
@@ -8010,7 +7886,7 @@ export default function App() {
                   <h4 className="text-2xl font-black text-slate-800">
                     {filteredGuests.filter(g => g.status === "checked_out").length}
                   </h4>
-                  <p className="text-[10px] text-slate-400 mt-1">مغادرون بزيارة {selectedVisitType === "general_1" ? "العامة 1" : selectedVisitType === "general_2" ? "العامة 2" : "الخاصة"}</p>
+                  <p className="text-[10px] text-slate-400 mt-1">نزلاء مغادرون في هذا الموسم</p>
                 </div>
 
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
@@ -9892,8 +9768,7 @@ export default function App() {
                   }`}
                 >
                   <CalendarDays className="w-3.5 h-3.5 text-amber-400" />
-                  <span>إدارة السنوات والزيارات (المواسم والنطاقات)</span>
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                  <span>إدارة السنوات والمواسم التشغيلية</span>
                 </button>
 
                 <button
@@ -10342,7 +10217,7 @@ export default function App() {
               )}
 
               {/* ========================================================================= */}
-              {/* SECTION: OPERATIONAL YEARS & VISITS MANAGEMENT HUB (إدارة السنوات والزيارات) */}
+              {/* SECTION: OPERATIONAL YEARS MANAGEMENT HUB (إدارة السنوات والمواسم التشغيلية) */}
               {/* ========================================================================= */}
               {(toolsActiveFilter === "all" || toolsActiveFilter === "years_visits") && (
                 <div className="bg-white border-2 border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-md space-y-8 relative overflow-hidden">
@@ -10355,13 +10230,13 @@ export default function App() {
                     <div className="space-y-1.5">
                       <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-black">
                         <CalendarDays className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>مركز إدارة المواسم والسنوات التشغيلية ونطاقات الزيارات</span>
+                        <span>مركز إدارة المواسم والسنوات التشغيلية للفندق</span>
                       </div>
                       <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                        إدارة وتخصيص السنوات والمواسم والزيارات
+                        إدارة وتخصيص السنوات والمواسم التشغيلية
                       </h2>
                       <p className="text-xs sm:text-sm text-slate-500 leading-relaxed max-w-3xl">
-                        تحكم كامل بالسنوات والمواسم الفندقية، تخصيص مسميات وتواريخ وملاحظات الزيارات (الزيارة العامة 1، العامة 2، الخاصة)، إدارة أرشيف الأفواج، مع أدوات تفريغ وترحيل البيانات بكل دقة واستقلالية تامة.
+                        تحكم كامل بالسنوات والمواسم الفندقية، إضافة مواسم تشغيلية جديدة، تصفح أرشيف النزلاء والخدمات لكل موسم، مع أدوات تفريغ وترحيل الغرف والسجلات بكل سهولة وموثوقية.
                       </p>
                     </div>
 
@@ -10372,13 +10247,6 @@ export default function App() {
                         <div className="text-sm font-black text-amber-400 flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5 text-emerald-400" />
                           <span>موسم {selectedYear}</span>
-                        </div>
-                      </div>
-                      <div className="w-px h-8 bg-slate-700"></div>
-                      <div className="text-right">
-                        <div className="text-[10px] text-slate-400 font-bold">نطاق الزيارة النشط:</div>
-                        <div className="text-xs font-black text-emerald-300">
-                          {visitSettings[selectedVisitType]?.title || selectedVisitType}
                         </div>
                       </div>
                     </div>
@@ -10574,220 +10442,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 2. VISITS SCOPES MANAGEMENT & CUSTOMIZATION */}
-                  <div className="space-y-4 pt-4 border-t border-slate-100">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <h3 className="font-extrabold text-base text-slate-800 flex items-center gap-2">
-                          <Layers className="w-5 h-5 text-emerald-600" />
-                          <span>تخصيص نطاقات الزيارات المعتمدة (الزيارة 1، الزيارة 2، الزيارة الخاصة)</span>
-                        </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          تعديل التواريخ والمسميات والملاحظات لكل نطاق زيارة معزول
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      {(["general_1", "general_2", "private"] as VisitType[]).map((vKey) => {
-                        const isCurrentVisit = selectedVisitType === vKey;
-                        const vConfig = visitSettings[vKey];
-                        const vGuestsCount = guests.filter(g => (g.visitType || "general_1") === vKey && g.status === "resident").length;
-                        const vServicesCount = serviceRequests.filter(s => (s.visitType || "general_1") === vKey).length;
-
-                        return (
-                          <div
-                            key={vKey}
-                            className={`p-4 rounded-2xl border transition relative flex flex-col justify-between ${
-                              isCurrentVisit
-                                ? "bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-500/20 shadow-sm"
-                                : "bg-white border-slate-200 hover:border-slate-300"
-                            }`}
-                          >
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-3 h-3 rounded-full ${isCurrentVisit ? "bg-emerald-500 animate-pulse" : "bg-slate-300"}`} />
-                                  <span className="font-extrabold text-sm text-slate-900">{vConfig?.title || vKey}</span>
-                                </div>
-                                {isCurrentVisit && (
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-black">
-                                    الزيارة النشطة
-                                  </span>
-                                )}
-                              </div>
-
-                              <p className="text-xs text-slate-500">{vConfig?.subtitle || "نطاق تشغيلي فندقي"}</p>
-
-                              <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-center text-xs">
-                                <div>
-                                  <div className="text-[10px] text-slate-400">نزلاء حاليون</div>
-                                  <div className="font-extrabold text-emerald-700">{vGuestsCount}</div>
-                                </div>
-                                <div>
-                                  <div className="text-[10px] text-slate-400">طلبات خدمات</div>
-                                  <div className="font-extrabold text-amber-700">{vServicesCount}</div>
-                                </div>
-                              </div>
-
-                              {vConfig?.startDate && (
-                                <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                                  <span>الفترة: {vConfig.startDate} إلى {vConfig.endDate || "مستمر"}</span>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
-                              <button
-                                type="button"
-                                onClick={() => handleVisitTypeChange(vKey)}
-                                disabled={isCurrentVisit}
-                                className={`w-full py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
-                                  isCurrentVisit
-                                    ? "bg-emerald-600 text-white font-black cursor-default shadow-xs"
-                                    : "bg-white hover:bg-emerald-700 hover:text-white text-slate-700 border border-slate-200 shadow-2xs"
-                                }`}
-                              >
-                                {isCurrentVisit ? (
-                                  <>
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                                    <span>الزيارة المفعلة حالياً</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <RotateCcw className="w-3.5 h-3.5" />
-                                    <span>تفعيل هذه الزيارة</span>
-                                  </>
-                                )}
-                              </button>
-
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingVisitType(vKey);
-                                    setEditVisitForm({
-                                      title: vConfig?.title || "",
-                                      subtitle: vConfig?.subtitle || "",
-                                      startDate: vConfig?.startDate || "",
-                                      endDate: vConfig?.endDate || "",
-                                      notes: vConfig?.notes || ""
-                                    });
-                                  }}
-                                  className="flex-1 py-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                                  title="تعديل مسمى وتواريخ وملاحظات الزيارة"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5 text-amber-600" />
-                                  <span>تعديل</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteOrResetVisit(vKey)}
-                                  className="py-1.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                                  title="حذف وتصفير بيانات ونزلاء هذه الزيارة"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                                  <span>حذف وتصفير</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Inline Edit Visit Form */}
-                    {editingVisitType && (
-                      <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200 mt-3 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-extrabold text-xs text-amber-900 flex items-center gap-1.5">
-                            <Edit3 className="w-4 h-4 text-amber-700" />
-                            <span>تعديل بيانات {editingVisitType === "general_1" ? "الزيارة العامة الأولى" : editingVisitType === "general_2" ? "الزيارة العامة الثانية" : "الزيارة الخاصة"}</span>
-                          </h4>
-                          <button
-                            type="button"
-                            onClick={() => setEditingVisitType(null)}
-                            className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">المسمى الرئيسي</label>
-                            <input
-                              type="text"
-                              value={editVisitForm.title}
-                              onChange={(e) => setEditVisitForm({ ...editVisitForm, title: e.target.value })}
-                              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800"
-                              placeholder="مثال: الزيارة الكبيرة الأولى"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">الوصف الفرعي</label>
-                            <input
-                              type="text"
-                              value={editVisitForm.subtitle}
-                              onChange={(e) => setEditVisitForm({ ...editVisitForm, subtitle: e.target.value })}
-                              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800"
-                              placeholder="مثال: وفد الضيوف الرسميين"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">تاريخ البداية</label>
-                            <input
-                              type="date"
-                              value={editVisitForm.startDate}
-                              onChange={(e) => setEditVisitForm({ ...editVisitForm, startDate: e.target.value })}
-                              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">تاريخ النهاية</label>
-                            <input
-                              type="date"
-                              value={editVisitForm.endDate}
-                              onChange={(e) => setEditVisitForm({ ...editVisitForm, endDate: e.target.value })}
-                              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-200/70">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteOrResetVisit(editingVisitType)}
-                            className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition flex items-center gap-1.5 cursor-pointer"
-                            title="حذف وتصفير كافة سجلات هذه الزيارة"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                            <span>حذف وتصفير سجلات الزيارة</span>
-                          </button>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setEditingVisitType(null)}
-                              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 cursor-pointer"
-                            >
-                              إلغاء
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSaveVisitSettings(editingVisitType)}
-                              className="px-4 py-1.5 rounded-xl text-xs font-black bg-amber-600 hover:bg-amber-500 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-                            >
-                              <Save className="w-3.5 h-3.5" />
-                              <span>حفظ التعديلات</span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 3. RESET ROOMS OCCUPANCY FOR NEW SEASON/VISIT */}
+                  {/* 2. RESET ROOMS OCCUPANCY FOR NEW SEASON/VISIT */}
                   <div className="space-y-3 pt-4 border-t border-slate-100">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-rose-50/60 border border-rose-200">
                       <div className="flex items-start gap-3">
@@ -10795,9 +10450,9 @@ export default function App() {
                           <RotateCcw className="w-5 h-5" />
                         </div>
                         <div>
-                          <h4 className="font-extrabold text-sm text-rose-950">تفريغ الغرف والجاهزية لموسم/زيارة جديدة</h4>
+                          <h4 className="font-extrabold text-sm text-rose-950">تفريغ الغرف والجاهزية لموسم تشغيلي جديد</h4>
                           <p className="text-xs text-rose-700/90 mt-0.5 leading-relaxed">
-                            يقوم هذا الإجراء بتحويل كافة نزلاء الزيارة الحالية إلى حالة (مغادر) وإعادة تعيين حالة جميع الغرف إلى (شاغرة ومتاحة) مع الاحتفاظ بكافة السجلات والبطاقات في الأرشيف دون حذفها.
+                            يقوم هذا الإجراء بتحويل كافة نزلاء الموسم الحالي إلى حالة (مغادر) وإعادة تعيين حالة جميع الغرف إلى (شاغرة ومتاحة) مع الاحتفاظ بكافة السجلات والبطاقات في الأرشيف دون حذفها.
                           </p>
                         </div>
                       </div>
@@ -10812,31 +10467,37 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 4. DATA MIGRATION & BATCH TRANSFER */}
+                  {/* 3. DATA MIGRATION & BATCH TRANSFER */}
                   <div className="space-y-3 pt-4 border-t border-slate-100">
                     <div className="flex items-center gap-2">
                       <ArrowLeftRight className="w-5 h-5 text-indigo-600" />
-                      <h4 className="font-extrabold text-sm text-slate-800">ترحيل ونقل بيانات النزلاء بين المواسم والزيارات</h4>
+                      <h4 className="font-extrabold text-sm text-slate-800">ترحيل ونقل بيانات النزلاء بين المواسم التشغيلية</h4>
                     </div>
                     <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-100 flex flex-col md:flex-row items-center justify-between gap-4">
                       <div className="flex flex-wrap items-center gap-3 w-full md:w-auto text-xs">
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-600">من:</span>
-                          <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-800">
-                            {migrationSourceVisit === "general_1" ? "الزيارة 1" : migrationSourceVisit === "general_2" ? "الزيارة 2" : "الخاصة"}
-                          </span>
+                          <span className="font-bold text-slate-600">من موسم:</span>
+                          <select
+                            value={migrationSourceYear}
+                            onChange={(e) => setMigrationSourceYear(e.target.value)}
+                            className="px-3 py-1 rounded-lg bg-white border border-indigo-200 font-bold text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500"
+                          >
+                            {yearsList.map(yr => (
+                              <option key={yr} value={yr}>موسم {yr}</option>
+                            ))}
+                          </select>
                         </div>
                         <ArrowLeftRight className="w-4 h-4 text-indigo-500" />
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-600">إلى:</span>
+                          <span className="font-bold text-slate-600">إلى موسم:</span>
                           <select
-                            value={migrationTargetVisit}
-                            onChange={(e) => setMigrationTargetVisit(e.target.value as VisitType)}
+                            value={migrationTargetYear}
+                            onChange={(e) => setMigrationTargetYear(e.target.value)}
                             className="px-3 py-1 rounded-lg bg-white border border-indigo-200 font-bold text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500"
                           >
-                            <option value="general_1">الزيارة العامة الأولى</option>
-                            <option value="general_2">الزيارة العامة الثانية</option>
-                            <option value="private">الزيارة الخاصة</option>
+                            {yearsList.map(yr => (
+                              <option key={yr} value={yr}>موسم {yr}</option>
+                            ))}
                           </select>
                         </div>
                       </div>
@@ -12087,6 +11748,64 @@ export default function App() {
           onRetryLogin={handleGoogleLogin}
           currentProjectId="hotel-management-cloud"
         />
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONFIRM DELETE OPERATIONAL YEAR / SEASON */}
+      {/* ========================================================================= */}
+      {yearToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-md w-full p-6 text-right space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center font-black">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">تأكيد حذف الموسم التشغيلي</h3>
+                  <p className="text-xs text-slate-500">الموسم: {yearToDelete}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setYearToDelete(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-rose-50/60 rounded-2xl border border-rose-100 space-y-2">
+              <p className="text-xs text-slate-700 leading-relaxed">
+                هل ترغب بحذف الموسم ({yearToDelete}) من قائمة المواسم والسنوات التشغيلية؟
+              </p>
+              <div className="text-xs text-slate-600 font-bold">
+                النزلاء المسجلون تحت هذا الموسم:{" "}
+                <span className="text-rose-600 font-black">
+                  {guests.filter(g => g.year === yearToDelete || (!g.year && yearToDelete === "2026")).length} نزيل
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setYearToDelete(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => executeDeleteYear(yearToDelete)}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>نعم، احذف الموسم الآن</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>
