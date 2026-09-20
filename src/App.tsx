@@ -734,6 +734,8 @@ export default function App() {
     return ["2026", "2025", "2024", "2027", "2028"];
   });
   const [newYearInput, setNewYearInput] = useState<string>("");
+  const [editingYear, setEditingYear] = useState<string | null>(null);
+  const [editYearInput, setEditYearInput] = useState<string>("");
 
   // Operational Year Selection (تحديد السنة المطلوبة)
   const [selectedYear, setSelectedYear] = useState<string>(() => {
@@ -3590,13 +3592,62 @@ export default function App() {
     triggerNotification("success", `تمت إضافة وتفعيل الموسم / السنة الجديدة بنجاح: ${trimmed}`);
   };
 
+  // EDIT YEAR / SEASON
+  const handleSaveEditYear = (oldYear: string, newYearRaw: string) => {
+    const newYear = newYearRaw.trim();
+    if (!newYear) {
+      triggerNotification("error", "الرجاء إدخال رقم أو اسم السنة/الموسم الجديد أولاً.");
+      return;
+    }
+    if (newYear !== oldYear && yearsList.includes(newYear)) {
+      triggerNotification("error", `الموسم (${newYear}) موجود بالفعل في القائمة.`);
+      return;
+    }
+
+    const updated = yearsList.map(y => y === oldYear ? newYear : y);
+    setYearsList(updated);
+    localStorage.setItem("hotel_years_list", JSON.stringify(updated));
+
+    if (selectedYear === oldYear) {
+      setSelectedYear(newYear);
+      localStorage.setItem("selected_year", newYear);
+    }
+
+    // Update guests assigned to this year
+    const updatedGuests = guests.map(g => {
+      if (g.year === oldYear || (!g.year && oldYear === "2026")) {
+        return { ...g, year: newYear };
+      }
+      return g;
+    });
+    persistGuests(updatedGuests);
+
+    // Update service requests
+    const updatedServices = serviceRequests.map(s => {
+      if (s.year === oldYear || (!s.year && oldYear === "2026")) {
+        return { ...s, year: newYear };
+      }
+      return s;
+    });
+    setServiceRequests(updatedServices);
+    localStorage.setItem("hotel_service_requests", JSON.stringify(updatedServices));
+
+    setEditingYear(null);
+    triggerNotification("success", `تم تعديل مسمى الموسم بنجاح من (${oldYear}) إلى (${newYear}) وتحديث كافة السجلات المرتبطة.`);
+  };
+
   // DELETE YEAR / SEASON
   const handleDeleteYear = (yearToDelete: string) => {
     if (yearsList.length <= 1) {
-      triggerNotification("error", "لا يمكن حذف السنة الوحيدة المتبقية في النظام.");
+      triggerNotification("error", "لا يمكن حذف الموسم الوحيد المتبقي في النظام.");
       return;
     }
-    if (!window.confirm(`هل أنت متأكد من حذف الموسم / السنة (${yearToDelete}) من قائمة السنوات المتاحة؟ (لن يتم مسح النزلاء المسجلين مسبقاً)`)) {
+    const yrGuestsCount = guests.filter(g => g.year === yearToDelete || (!g.year && yearToDelete === "2026")).length;
+    const confirmMsg = yrGuestsCount > 0
+      ? `⚠️ تأكيد حذف الموسم (${yearToDelete}):\n\nيوجد حالياً (${yrGuestsCount}) سجل نزلاء مرتبطين بهذا الموسم.\nهل ترغب بحذف هذا الموسم من قائمة المواسم؟ (ستبقى سجلات النزلاء محفوظة في النظام ولكن سيتم نقل الموسم النشط لموسم آخر)`
+      : `هل أنت متأكد من حذف الموسم (${yearToDelete}) من قائمة السنوات والمواسم؟`;
+
+    if (!window.confirm(confirmMsg)) {
       return;
     }
     const updated = yearsList.filter(y => y !== yearToDelete);
@@ -3606,7 +3657,7 @@ export default function App() {
       setSelectedYear(updated[0]);
       localStorage.setItem("selected_year", updated[0]);
     }
-    triggerNotification("success", `تم حذف السنة (${yearToDelete}) من قائمة الخيارات.`);
+    triggerNotification("success", `تم حذف الموسم (${yearToDelete}) بنجاح.`);
   };
 
   // VISIT TYPE HANDLER (الزيارة العامة الأولى، الزيارة العامة الثانية، والزيارة الخاصة)
@@ -3627,6 +3678,62 @@ export default function App() {
     localStorage.setItem("hotel_visit_settings", JSON.stringify(updated));
     setEditingVisitType(null);
     triggerNotification("success", `تم حفظ تخصيص وإعدادات (${updated[visitId].title}) بنجاح! 💾`);
+  };
+
+  // DELETE OR RESET VISIT SCOPE DATA
+  const handleDeleteOrResetVisit = (visitId: VisitType) => {
+    const visitName = visitSettings[visitId]?.title || visitId;
+    const vGuestsCount = guests.filter(g => (g.visitType || "general_1") === visitId).length;
+    const vServicesCount = serviceRequests.filter(s => (s.visitType || "general_1") === visitId).length;
+
+    const confirmMsg = `⚠️ تأكيد حذف وتصفير سجلات (${visitName}):\n\n- عدد النزلاء المرتبطين بهذه الزيارة: ${vGuestsCount}\n- طلبات الخدمات المرتبطة: ${vServicesCount}\n\nسيتم حذف سجلات النزلاء والطلبات الخاصة بهذه الزيارة بالكامل، وإعادة تعيين مسمياتها وتواريخها للافتراضي.\n\nهل ترغب بالمتابعة بالتأكيد؟`;
+
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
+    // Filter out guests for this visit
+    const remainingGuests = guests.filter(g => (g.visitType || "general_1") !== visitId);
+    persistGuests(remainingGuests);
+
+    // Filter out service requests for this visit
+    const remainingServices = serviceRequests.filter(s => (s.visitType || "general_1") !== visitId);
+    setServiceRequests(remainingServices);
+    localStorage.setItem("hotel_service_requests", JSON.stringify(remainingServices));
+
+    // Reset visit settings to default
+    const defaultSettings: Record<VisitType, { title: string; subtitle: string; startDate: string; endDate: string; notes: string }> = {
+      general_1: {
+        title: "الزيارة العامة الأولى",
+        subtitle: "الزيارة الكبيرة الأولى",
+        startDate: "",
+        endDate: "",
+        notes: "نطاق الزيارة العامة الأولى للموسم التشغيلي"
+      },
+      general_2: {
+        title: "الزيارة العامة الثانية",
+        subtitle: "الزيارة الكبيرة الثانية",
+        startDate: "",
+        endDate: "",
+        notes: "نطاق الزيارة العامة الثانية للموسم التشغيلي"
+      },
+      private: {
+        title: "الزيارة الخاصة",
+        subtitle: "قسم النزلاء الخاص والمنفصل",
+        startDate: "",
+        endDate: "",
+        notes: "نطاق الزيارة الخاصة المنفصلة"
+      }
+    };
+
+    const updated = {
+      ...visitSettings,
+      [visitId]: defaultSettings[visitId]
+    };
+    setVisitSettings(updated);
+    localStorage.setItem("hotel_visit_settings", JSON.stringify(updated));
+
+    triggerNotification("success", `تم حذف وتصفير سجلات وإعدادات (${visitName}) بنجاح! 🗑️`);
   };
 
   // RESET ROOMS OCCUPANCY FOR NEW VISIT/SEASON (تصفير وتفريغ حالة الغرف لبدء زيارة جديدة بدون مسح سجلات النزلاء القديمة)
@@ -5017,22 +5124,7 @@ export default function App() {
                 <p className="text-[10px] text-emerald-200/80 leading-relaxed">
                   يتم حفظ وتحديث بيانات الغرف والنزلاء والطلبات تلقائياً بالخادم.
                 </p>
-                <div className="flex flex-col gap-1.5 pt-1">
-                  <button
-                    onClick={handleUnblockCookiesAndStorage}
-                    className="w-full py-1.5 bg-sky-900/60 hover:bg-sky-800 border border-sky-600/50 rounded-lg text-sky-200 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition cursor-pointer"
-                    title="فك حظر ملفات تعريف الارتباط وصلاحيات التخزين"
-                  >
-                    <span>🔓 فك حظر ملفات التعريف والصلاحيات</span>
-                  </button>
-                  <button
-                    onClick={() => window.open(window.location.href, "_blank")}
-                    className="w-full py-1.5 bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded-lg text-slate-300 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition cursor-pointer"
-                    title="فتح النظام في نافذة مستقلة لتشغيل كامل الصلاحيات دون قيود الإطار"
-                  >
-                    <ExternalLink className="w-3 h-3 text-slate-400" />
-                    <span>فتح النظام في نافذة مستقلة ↗️</span>
-                  </button>
+                <div className="pt-1">
                   <button 
                     onClick={() => handleGoogleLogin()}
                     disabled={isLoggingInGoogle}
@@ -5060,7 +5152,7 @@ export default function App() {
                 </div>
                 <p className="truncate text-slate-400 text-[10px]" title={googleUser?.email}>الحساب: {googleUser?.email}</p>
                 
-                <div className="pt-2 flex flex-col gap-1.5">
+                <div className="pt-2">
                   <div className="flex gap-1.5">
                     <button 
                       onClick={handleForceRefresh}
@@ -5078,13 +5170,6 @@ export default function App() {
                       خروج
                     </button>
                   </div>
-                  <button
-                    onClick={() => window.open(window.location.href, "_blank")}
-                    className="w-full py-1 bg-slate-900/60 hover:bg-slate-800 border border-slate-700/60 rounded text-slate-300 hover:text-white font-bold text-[10px] flex items-center justify-center gap-1 transition cursor-pointer"
-                  >
-                    <ExternalLink className="w-3 h-3 text-slate-400" />
-                    <span>نافذة مستقلة ↗️</span>
-                  </button>
                 </div>
               </div>
             )}
@@ -5434,24 +5519,6 @@ export default function App() {
               </button>
             )}
 
-            {/* Unblock Cookies & Credentials Action Button */}
-            <button
-              onClick={handleUnblockCookiesAndStorage}
-              className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-900 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
-              title="فك حظر ملفات تعريف الارتباط وصلاحيات التخزين السحابية وحل قيود الإطار"
-            >
-              <span>🔓 فك حظر ملفات التعريف</span>
-            </button>
-
-            {/* Open in Standalone Tab / Window */}
-            <button
-              onClick={() => window.open(window.location.href, "_blank")}
-              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 transition cursor-pointer"
-              title="فتح النظام في نافذة مستقلة لتشغيل كامل الصلاحيات والطباعة بحرية تامة"
-            >
-              <ExternalLink className="w-3.5 h-3.5 text-slate-600" />
-              <span className="hidden sm:inline">نافذة مستقلة</span>
-            </button>
 
             <button 
               onClick={handleForceRefresh}
@@ -10362,6 +10429,8 @@ export default function App() {
                         const yrResidents = yrGuests.filter(g => g.status === "resident").length;
                         const yrServices = serviceRequests.filter(s => (!s.year && yr === "2026") || s.year === yr).length;
 
+                        const isEditingThisYear = editingYear === yr;
+
                         return (
                           <div
                             key={yr}
@@ -10387,56 +10456,117 @@ export default function App() {
                                   النشط
                                 </span>
                               ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteYear(yr)}
-                                  className="p-1 text-slate-300 hover:text-rose-600 rounded-lg transition"
-                                  title="حذف من القائمة"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                <span className="text-[10px] text-slate-400 font-bold">غير نشط</span>
                               )}
                             </div>
 
-                            {/* Year Quick Metrics */}
-                            <div className="grid grid-cols-3 gap-1.5 p-2 bg-white/80 rounded-xl border border-slate-200/60 text-center text-[10px]">
-                              <div>
-                                <div className="text-slate-400">النزلاء</div>
-                                <div className="font-extrabold text-slate-800">{yrGuests.length}</div>
+                            {isEditingThisYear ? (
+                              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 space-y-2">
+                                <div className="text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                                  <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>تعديل مسمى أو رقم الموسم:</span>
+                                </div>
+                                <input
+                                  type="text"
+                                  value={editYearInput}
+                                  onChange={(e) => setEditYearInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      handleSaveEditYear(yr, editYearInput);
+                                    }
+                                  }}
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-bold text-slate-900 outline-none focus:ring-2 focus:ring-amber-500"
+                                  autoFocus
+                                />
+                                <div className="flex items-center justify-end gap-1.5 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingYear(null)}
+                                    className="px-2.5 py-1 text-[11px] font-bold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
+                                  >
+                                    إلغاء
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveEditYear(yr, editYearInput)}
+                                    className="px-3 py-1 text-[11px] font-black text-white bg-amber-600 hover:bg-amber-500 rounded-lg flex items-center gap-1 shadow-xs cursor-pointer"
+                                  >
+                                    <Save className="w-3 h-3" />
+                                    <span>حفظ التعديل</span>
+                                  </button>
+                                </div>
                               </div>
-                              <div className="border-x border-slate-100">
-                                <div className="text-slate-400">الساكنين</div>
-                                <div className="font-extrabold text-emerald-700">{yrResidents}</div>
-                              </div>
-                              <div>
-                                <div className="text-slate-400">الخدمات</div>
-                                <div className="font-extrabold text-amber-700">{yrServices}</div>
-                              </div>
-                            </div>
+                            ) : (
+                              <>
+                                {/* Year Quick Metrics */}
+                                <div className="grid grid-cols-3 gap-1.5 p-2 bg-white/80 rounded-xl border border-slate-200/60 text-center text-[10px]">
+                                  <div>
+                                    <div className="text-slate-400">النزلاء</div>
+                                    <div className="font-extrabold text-slate-800">{yrGuests.length}</div>
+                                  </div>
+                                  <div className="border-x border-slate-100">
+                                    <div className="text-slate-400">الساكنين</div>
+                                    <div className="font-extrabold text-emerald-700">{yrResidents}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-slate-400">الخدمات</div>
+                                    <div className="font-extrabold text-amber-700">{yrServices}</div>
+                                  </div>
+                                </div>
 
-                            {/* Activate Year Action */}
-                            <button
-                              type="button"
-                              onClick={() => handleYearChange(yr)}
-                              disabled={isCurrent}
-                              className={`w-full py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                                isCurrent
-                                  ? "bg-emerald-600 text-white font-black cursor-default shadow-xs"
-                                  : "bg-white hover:bg-emerald-800 hover:text-white text-slate-700 border border-slate-200 shadow-2xs"
-                              }`}
-                            >
-                              {isCurrent ? (
-                                <>
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                                  <span>السنة المحددة حالياً</span>
-                                </>
-                              ) : (
-                                <>
-                                  <RotateCcw className="w-3.5 h-3.5" />
-                                  <span>تفعيل كسنة نشطة</span>
-                                </>
-                              )}
-                            </button>
+                                {/* Actions: Activate, Edit, Delete */}
+                                <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleYearChange(yr)}
+                                    disabled={isCurrent}
+                                    className={`w-full py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                                      isCurrent
+                                        ? "bg-emerald-600 text-white font-black cursor-default shadow-xs"
+                                        : "bg-white hover:bg-emerald-800 hover:text-white text-slate-700 border border-slate-200 shadow-2xs"
+                                    }`}
+                                  >
+                                    {isCurrent ? (
+                                      <>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                                        <span>الموسم النشط حالياً</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                        <span>تفعيل كموسم نشط</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingYear(yr);
+                                        setEditYearInput(yr);
+                                      }}
+                                      className="flex-1 py-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                      title="تعديل مسمى أو رقم الموسم"
+                                    >
+                                      <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                                      <span>تعديل</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteYear(yr)}
+                                      className="py-1.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                      title="حذف هذا الموسم من القائمة"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                      <span>حذف</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
                           </div>
                         );
                       })}
@@ -10508,21 +10638,21 @@ export default function App() {
                               )}
                             </div>
 
-                            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
+                            <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
                               <button
                                 type="button"
                                 onClick={() => handleVisitTypeChange(vKey)}
                                 disabled={isCurrentVisit}
-                                className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                                className={`w-full py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
                                   isCurrentVisit
-                                    ? "bg-emerald-600 text-white cursor-default"
-                                    : "bg-white hover:bg-emerald-700 hover:text-white text-slate-700 border border-slate-200"
+                                    ? "bg-emerald-600 text-white font-black cursor-default shadow-xs"
+                                    : "bg-white hover:bg-emerald-700 hover:text-white text-slate-700 border border-slate-200 shadow-2xs"
                                 }`}
                               >
                                 {isCurrentVisit ? (
                                   <>
-                                    <CheckCircle2 className="w-3.5 h-3.5" />
-                                    <span>مفعلة حالياً</span>
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                                    <span>الزيارة المفعلة حالياً</span>
                                   </>
                                 ) : (
                                   <>
@@ -10532,23 +10662,36 @@ export default function App() {
                                 )}
                               </button>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingVisitType(vKey);
-                                  setEditVisitForm({
-                                    title: vConfig?.title || "",
-                                    subtitle: vConfig?.subtitle || "",
-                                    startDate: vConfig?.startDate || "",
-                                    endDate: vConfig?.endDate || "",
-                                    notes: vConfig?.notes || ""
-                                  });
-                                }}
-                                className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition cursor-pointer"
-                                title="تعديل تفاصيل الزيارة"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingVisitType(vKey);
+                                    setEditVisitForm({
+                                      title: vConfig?.title || "",
+                                      subtitle: vConfig?.subtitle || "",
+                                      startDate: vConfig?.startDate || "",
+                                      endDate: vConfig?.endDate || "",
+                                      notes: vConfig?.notes || ""
+                                    });
+                                  }}
+                                  className="flex-1 py-1.5 px-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                  title="تعديل مسمى وتواريخ وملاحظات الزيارة"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>تعديل</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteOrResetVisit(vKey)}
+                                  className="py-1.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                                  title="حذف وتصفير بيانات ونزلاء هذه الزيارة"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                  <span>حذف وتصفير</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -10611,22 +10754,34 @@ export default function App() {
                             />
                           </div>
                         </div>
-                        <div className="flex justify-end gap-2 pt-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-200/70">
                           <button
                             type="button"
-                            onClick={() => setEditingVisitType(null)}
-                            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 cursor-pointer"
+                            onClick={() => handleDeleteOrResetVisit(editingVisitType)}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition flex items-center gap-1.5 cursor-pointer"
+                            title="حذف وتصفير كافة سجلات هذه الزيارة"
                           >
-                            إلغاء
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                            <span>حذف وتصفير سجلات الزيارة</span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSaveVisitSettings(editingVisitType)}
-                            className="px-4 py-1.5 rounded-xl text-xs font-black bg-amber-600 hover:bg-amber-500 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-                          >
-                            <Save className="w-3.5 h-3.5" />
-                            <span>حفظ التعديلات</span>
-                          </button>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingVisitType(null)}
+                              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 cursor-pointer"
+                            >
+                              إلغاء
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveVisitSettings(editingVisitType)}
+                              className="px-4 py-1.5 rounded-xl text-xs font-black bg-amber-600 hover:bg-amber-500 text-white transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              <span>حفظ التعديلات</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
