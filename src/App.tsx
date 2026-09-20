@@ -110,6 +110,7 @@ import {
 import { VercelAuthHelpModal } from "./components/VercelAuthHelpModal";
 import { CloudSyncDiagnosticModal } from "./components/CloudSyncDiagnosticModal";
 import { AvailableRoomAssigner } from "./components/AvailableRoomAssigner";
+import { AdministrativeRoleSelector } from "./components/AdministrativeRoleSelector";
 import { 
   findOrCreateSpreadsheet, 
   validateAndConnectSpreadsheet,
@@ -137,7 +138,7 @@ import { PhoneCountryInput } from "./components/PhoneCountryInput";
 import { CountrySelectInput } from "./components/CountrySelectInput";
 import { formatPhoneWithCountryCode } from "./lib/countryCodes";
 
-export const ADMIN_ROLES: string[] = [
+export const DEFAULT_ADMIN_ROLES: string[] = [
   "رئيس الوفد",
   "نائب رئيس الوفد",
   "عضو وفد",
@@ -148,9 +149,10 @@ export const ADMIN_ROLES: string[] = [
   "كادر أمني وحراسة",
   "كادر خدمات ودعم",
   "إعلامي / مصور",
-  "زائر عام",
-  "أخرى (مخصص)"
+  "زائر عام"
 ];
+
+export const ADMIN_ROLES: string[] = DEFAULT_ADMIN_ROLES;
 
 export const getAdminRoleBadge = (role?: string) => {
   if (!role) return null;
@@ -411,21 +413,6 @@ function GuestPhotoUploadWidget({
     }
   };
 
-  const applyPresetAvatar = async (avatarUrl: string) => {
-    setIsProcessing(true);
-    const processed = await processImageQuality(avatarUrl, photoData.quality || "high");
-    setIsProcessing(false);
-
-    onChange({
-      photoUrl: processed.processedUrl,
-      rawPhotoUrl: avatarUrl,
-      quality: photoData.quality || "high",
-      sizeKb: processed.sizeKb,
-      dimensions: `${processed.width || 400} × ${processed.height || 400} px`
-    });
-    onNotification?.("success", "تم اختيار صورة النزيل الرمزية الافتراضية بنجاح.");
-  };
-
   return (
     <div className={`p-5 rounded-2xl border transition ${isDark ? "bg-slate-900/80 border-slate-700/80 text-slate-100" : "bg-slate-50 border-slate-200/90 text-slate-800"} space-y-4 text-right`}>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
@@ -513,25 +500,6 @@ function GuestPhotoUploadWidget({
                 <span>إلغاء الكاميرا</span>
               </button>
             )}
-
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => applyPresetAvatar("https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=600")}
-                className={`px-3 py-2.5 text-[11px] font-bold rounded-xl border transition ${isDark ? "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-100"}`}
-                title="صورة افتراضية للنزيل"
-              >
-                👤 رمزية 1
-              </button>
-              <button
-                type="button"
-                onClick={() => applyPresetAvatar("https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=600")}
-                className={`px-3 py-2.5 text-[11px] font-bold rounded-xl border transition ${isDark ? "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-100"}`}
-                title="صورة افتراضية للنزيل"
-              >
-                👤 رمزية 2
-              </button>
-            </div>
           </div>
 
           {isCameraActive && (
@@ -1157,6 +1125,29 @@ export default function App() {
       administrativeRole: "عضو وفد",
       customAdminRole: ""
     });
+  };
+
+  // Dynamic Administrative Roles State with persistence (الصفة / الدور الإداري للنزيل)
+  const [adminRoles, setAdminRoles] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("HOTEL_ADMIN_ROLES");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error("Error loading admin roles from storage", e);
+    }
+    return DEFAULT_ADMIN_ROLES;
+  });
+
+  const handleAdminRolesChange = (newRoles: string[]) => {
+    setAdminRoles(newRoles);
+    try {
+      localStorage.setItem("HOTEL_ADMIN_ROLES", JSON.stringify(newRoles));
+    } catch (e) {
+      console.error("Error saving admin roles to storage", e);
+    }
   };
   
   const [roomConfigForm, setRoomConfigForm] = useState({
@@ -8818,45 +8809,16 @@ export default function App() {
                     />
                   </div>
 
-                  {/* الصفة / الدور الإداري للنزيل */}
-                  <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200 space-y-3">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>الصفة / الدور الإداري للنزيل *</span>
-                        </span>
-                        {getAdminRoleBadge(
-                          checkInForm.administrativeRole === "أخرى (مخصص)"
-                            ? checkInForm.customAdminRole || "عضو وفد"
-                            : checkInForm.administrativeRole
-                        )}
-                      </label>
-                      <select
-                        value={checkInForm.administrativeRole}
-                        onChange={e => setCheckInForm({ ...checkInForm, administrativeRole: e.target.value })}
-                        className="w-full bg-white border border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 outline-none transition"
-                      >
-                        {ADMIN_ROLES.map(role => (
-                          <option key={role} value={role}>{role}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {checkInForm.administrativeRole === "أخرى (مخصص)" && (
-                      <div className="animate-in fade-in duration-200">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">اكتب الصفة الإدارية المخصصة *</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="مثال: مستشار قانوني، طبيب الوفد، إلخ..."
-                          value={checkInForm.customAdminRole}
-                          onChange={e => setCheckInForm({ ...checkInForm, customAdminRole: e.target.value })}
-                          className="w-full bg-white border border-indigo-300 focus:border-indigo-600 rounded-xl px-4 py-2 text-sm outline-none transition"
-                        />
-                      </div>
-                    )}
-                  </div>
+                  {/* الصفة / الدور الإداري للنزيل - مع أزرار الإضافة والتعديل والحذف */}
+                  <AdministrativeRoleSelector
+                    roles={adminRoles}
+                    selectedRole={checkInForm.administrativeRole}
+                    onSelectRole={(role) => setCheckInForm(prev => ({ ...prev, administrativeRole: role }))}
+                    onRolesChange={handleAdminRolesChange}
+                    onNotification={triggerNotification}
+                    label="الصفة / الدور الإداري للنزيل"
+                    required={true}
+                  />
 
                   {/* ==================== تعيين الغرفة الفندقية المتاحة - تصميم منضبط، مرتب، واحترافي ==================== */}
                   <AvailableRoomAssigner
@@ -11531,12 +11493,9 @@ export default function App() {
                   onChange={(e) => setDirectCheckInRole(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
                 >
-                  <option value="عضو وفد">عضو وفد</option>
-                  <option value="رئيس وفد">رئيس وفد</option>
-                  <option value="ضيف شرف">ضيف شرف</option>
-                  <option value="مشرف">مشرف</option>
-                  <option value="إداري">إداري</option>
-                  <option value="مرافق">مرافق</option>
+                  {adminRoles.map((role) => (
+                    <option key={role} value={role}>{role}</option>
+                  ))}
                   <option value="custom">صفة مخصصة أخرى...</option>
                 </select>
               </div>
