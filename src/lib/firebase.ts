@@ -290,8 +290,6 @@ if (appInstance) {
 
 try {
   providerInstance = new GoogleAuthProvider();
-  providerInstance.addScope("https://www.googleapis.com/auth/spreadsheets");
-  providerInstance.addScope("https://www.googleapis.com/auth/drive.file");
   providerInstance.setCustomParameters({
     prompt: "select_account"
   });
@@ -740,9 +738,21 @@ export const subscribeToPendingRequests = (
 };
 
 /**
- * Save hotel global config (e.g., registrationLinkStatus: "open" | "closed")
+ * Save hotel global config (e.g., registrationLinkStatus, passwords, logos, roles)
  */
-export const saveHotelConfigToFirestore = async (cfg: { registrationLinkStatus?: string; hotelName?: string }): Promise<boolean> => {
+export const saveHotelConfigToFirestore = async (cfg: { 
+  registrationLinkStatus?: string; 
+  hotelName?: string; 
+  adminUsername?: string;
+  adminPassword?: string;
+  receptionPassword?: string;
+  servicesPassword?: string;
+  gatePassword?: string;
+  publicPassword?: string;
+  appLogoImage?: string | null;
+  cardLogoImage?: string | null;
+  [key: string]: any;
+}): Promise<boolean> => {
   if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {
     const docRef = doc(dbInstance, "config", "hotel_settings");
@@ -758,7 +768,7 @@ export const saveHotelConfigToFirestore = async (cfg: { registrationLinkStatus?:
  * Subscribe to hotel config in real-time
  */
 export const subscribeToHotelConfig = (
-  onData: (cfg: { registrationLinkStatus?: string; hotelName?: string }) => void
+  onData: (cfg: Record<string, any>) => void
 ): (() => void) => {
   if (!isFirebaseFirestoreReady() || !dbInstance) return () => {};
   try {
@@ -788,7 +798,7 @@ export const subscribeToHotelConfig = (
 /**
  * Fetch hotel config once (with timeout)
  */
-export const fetchHotelConfigFromFirestore = async (): Promise<{ registrationLinkStatus?: string; hotelName?: string } | null> => {
+export const fetchHotelConfigFromFirestore = async (): Promise<Record<string, any> | null> => {
   if (!isFirebaseFirestoreReady() || !dbInstance) return null;
   try {
     const docRef = doc(dbInstance, "config", "hotel_settings");
@@ -807,13 +817,15 @@ export const fetchHotelConfigFromFirestore = async (): Promise<{ registrationLin
 };
 
 /**
- * Backup / sync full hotel state (rooms, guests, serviceRequests, gateLogs) to Firestore
+ * Backup / sync full hotel state (rooms, guests, serviceRequests, gateLogs, pendingRequests) to Firestore
  */
 export const saveHotelFullStateToFirestore = async (data: {
   rooms?: Room[];
   guests?: Guest[];
   serviceRequests?: ServiceRequest[];
   gateLogs?: GateEntryLog[];
+  pendingRequests?: any[];
+  [key: string]: any;
 }): Promise<boolean> => {
   if (!isFirebaseFirestoreReady() || !dbInstance) return false;
   try {

@@ -23,7 +23,6 @@
   "features": {
     "allowSelfRegistration": true,
     "requireApproval": true,
-    "soundAlerts": true,
-    "googleSheetsSync": true
+    "soundAlerts": true
   }
 }

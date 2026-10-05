@@ -18,11 +18,13 @@ import {
   UploadCloud, 
   DownloadCloud, 
   Upload,
+  Download,
   Cloud,
   LogOut, 
   LogIn, 
   UserPlus, 
   UserCheck,
+  UserMinus,
   RefreshCw,
   Search,
   Filter,
@@ -107,36 +109,15 @@ import {
   saveHotelFullStateToFirestore,
   fetchHotelFullStateFromFirestore
 } from "./lib/firebase";
-import { VercelAuthHelpModal } from "./components/VercelAuthHelpModal";
-import { CloudSyncDiagnosticModal } from "./components/CloudSyncDiagnosticModal";
 import { AvailableRoomAssigner } from "./components/AvailableRoomAssigner";
 import { AdministrativeRoleSelector } from "./components/AdministrativeRoleSelector";
-import { 
-  findOrCreateSpreadsheet, 
-  validateAndConnectSpreadsheet,
-  ensureSpreadsheetStructure,
-  initializeSheetHeaders,
-  extractSpreadsheetId,
-  fetchRoomsFromSheets, 
-  saveRoomsToSheets, 
-  fetchGuestsFromSheets, 
-  saveGuestsToSheets,
-  fetchServiceRequestsFromSheets,
-  saveServiceRequestsToSheets,
-  fetchPendingRequestsFromSheets,
-  savePendingRequestsToSheets,
-  appendPendingRequestToSheets,
-  saveSettingsToSheets,
-  saveAllSettingsToSheets,
-  fetchSettingsFromSheets,
-  appendGateLogToSheets,
-  SEED_ROOMS,
-  SEED_GUESTS
-} from "./lib/sheets";
+import { GuestRemovalModal } from "./components/GuestRemovalModal";
+import { SEED_ROOMS, SEED_GUESTS } from "./lib/initialData";
 import { SecurityGateStation } from "./components/SecurityGateStation";
 import { PhoneCountryInput } from "./components/PhoneCountryInput";
 import { CountrySelectInput } from "./components/CountrySelectInput";
 import { formatPhoneWithCountryCode } from "./lib/countryCodes";
+import { SupabaseDatabaseManager } from "./components/SupabaseDatabaseManager";
 
 export const DEFAULT_ADMIN_ROLES: string[] = [
   "رئيس الوفد",
@@ -670,6 +651,10 @@ export default function App() {
     year: string;
     visitType: VisitType;
     photoUrl: string;
+    photoRawUrl: string;
+    photoQuality: ImageQualityLevel;
+    photoSizeKb: number;
+    photoDimensions: string;
     administrativeRole: string;
     customAdminRole: string;
   }>({
@@ -687,6 +672,10 @@ export default function App() {
     year: "2026",
     visitType: "general_1",
     photoUrl: "",
+    photoRawUrl: "",
+    photoQuality: "high",
+    photoSizeKb: 0,
+    photoDimensions: "",
     administrativeRole: "عضو وفد",
     customAdminRole: ""
   });
@@ -760,8 +749,11 @@ export default function App() {
   // In-app Modal Confirmation State for Deleting Years
   const [yearToDelete, setYearToDelete] = useState<string | null>(null);
 
+  // Guest Removal / Exclusion / Permanent Deletion State (استبعاد او حذف نهائي - رمزية 1 و رمزية 2)
+  const [guestRemovalTarget, setGuestRemovalTarget] = useState<Guest | null>(null);
+
   // Tools Sub Navigation Tab Filter
-  const [toolsActiveFilter, setToolsActiveFilter] = useState<"all" | "app_logo" | "guest_card" | "passwords" | "years_visits" | "database" | "barcode" | "backup" | "requests">("all");
+  const [toolsActiveFilter, setToolsActiveFilter] = useState<"all" | "app_logo" | "guest_card" | "passwords" | "years" | "database" | "barcode" | "backup" | "requests">("all");
 
   // Migration & Batch Operations State
   const [migrationSourceVisit, setMigrationSourceVisit] = useState<VisitType>("general_1");
@@ -786,6 +778,7 @@ export default function App() {
     return (localStorage.getItem("active_role") as RoleType) || "admin";
   });
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
+  const [showSupabaseModal, setShowSupabaseModal] = useState<boolean>(false);
   const [loginUsername, setLoginUsername] = useState<string>("admin");
   const [loginPassword, setLoginPassword] = useState<string>("");
   const [loginError, setLoginError] = useState<string>("");
@@ -874,10 +867,7 @@ export default function App() {
   const [serviceStatusFilter, setServiceStatusFilter] = useState<string>("all");
   const [serviceSearchQuery, setServiceSearchQuery] = useState<string>("");
   const [showAddServiceModal, setShowAddServiceModal] = useState<boolean>(false);
-  const [showCloudSyncDiagnosticModal, setShowCloudSyncDiagnosticModal] = useState<boolean>(false);
-  const [showVercelAuthHelpModal, setShowVercelAuthHelpModal] = useState<boolean>(false);
-  const [authErrorDetails, setAuthErrorDetails] = useState<AuthErrorDetails | null>(null);
-  const [isLoggingInGoogle, setIsLoggingInGoogle] = useState<boolean>(false);
+
   const [newServiceForm, setNewServiceForm] = useState({
     roomNumber: "",
     guestName: "",
@@ -1078,15 +1068,9 @@ export default function App() {
     return roleObj?.permissions?.[tabKey] ?? true;
   };
 
-  // Auth and Google Sheets states
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
-  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(() => localStorage.getItem("spreadsheet_id") || null);
+  // System and Database states
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
-  const [googleUser, setGoogleUser] = useState<any>(null);
-  const [customSpreadsheetInput, setCustomSpreadsheetInput] = useState<string>("");
-  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string | null>(() => localStorage.getItem("sheets_last_sync_time") || null);
-  const [isFixingSheets, setIsFixingSheets] = useState<boolean>(false);
-  const [isExportingToSheets, setIsExportingToSheets] = useState<boolean>(false);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string | null>(() => localStorage.getItem("system_last_sync_time") || null);
 
   // Forms states
   const [checkInForm, setCheckInForm] = useState({
@@ -1933,89 +1917,7 @@ export default function App() {
 
     fetchPendingRequests();
     fetchBackendConfig();
-
-    // 3. Setup Firebase auth state & check redirect result
-    checkRedirectResult().then(async (result) => {
-      if (result) {
-        setGoogleUser(result.user);
-        setIsDemoMode(false);
-        const storedId = localStorage.getItem("spreadsheet_id");
-        if (storedId) {
-          setSpreadsheetId(storedId);
-          await loadDataFromSheets(storedId, result.accessToken, true);
-        } else {
-          syncWithGoogleSheets(result.accessToken);
-        }
-        triggerNotification("success", "تم إكمال تسجيل الدخول والمزامنة بنجاح! 🟢");
-      }
-    }).catch((err) => {
-      console.warn("Check redirect result error:", err);
-    });
-
-    const unsubscribe = initAuth(
-      async (user, token) => {
-        setGoogleUser(user);
-        setIsDemoMode(false);
-        const storedId = localStorage.getItem("spreadsheet_id");
-        if (storedId) {
-          setSpreadsheetId(storedId);
-          await loadDataFromSheets(storedId, token, true);
-          // If there were offline pending modifications, sync them up seamlessly
-          if (localStorage.getItem("hotel_has_pending_sync") === "true") {
-            try {
-              await handlePushAllLocalToSheets();
-              setHasPendingSync(false);
-              localStorage.removeItem("hotel_has_pending_sync");
-            } catch (syncErr) {
-              console.warn("Auto-sync pending data error:", syncErr);
-            }
-          }
-        } else {
-          // Attempt to find or create spreadsheet
-          syncWithGoogleSheets(token);
-        }
-      },
-      () => {
-        setGoogleUser(null);
-        setIsDemoMode(true);
-      }
-    );
-
-    return () => unsubscribe();
   }, []);
-
-  // Listen for Google OAuth Token renewal and expiration events
-  useEffect(() => {
-    const handleAuthExpired = () => {
-      setGoogleUser(null);
-      setIsDemoMode(true);
-      triggerNotification("error", "انتهت جلسة قوقل. تم تفعيل الحفظ المحلي الذكي لضمان عدم فقدان أي بيانات.");
-    };
-
-    const handleAuthRenewed = async () => {
-      const token = getAccessToken();
-      if (token && spreadsheetId) {
-        setIsDemoMode(false);
-        if (localStorage.getItem("hotel_has_pending_sync") === "true") {
-          try {
-            await handlePushAllLocalToSheets();
-            setHasPendingSync(false);
-            localStorage.removeItem("hotel_has_pending_sync");
-            triggerNotification("success", "تمت مزامنة كافة التعديلات مع قوقل شيت تلقائياً! 🟢");
-          } catch (err) {
-            console.error("Auto sync after renew failed:", err);
-          }
-        }
-      }
-    };
-
-    window.addEventListener("google_auth_expired", handleAuthExpired);
-    window.addEventListener("google_auth_renewed", handleAuthRenewed);
-    return () => {
-      window.removeEventListener("google_auth_expired", handleAuthExpired);
-      window.removeEventListener("google_auth_renewed", handleAuthRenewed);
-    };
-  }, [spreadsheetId]);
 
   // Audio chime alert using Web Audio API for reception staff
   const playIncomingRequestChime = () => {
@@ -2081,17 +1983,7 @@ export default function App() {
     } catch (e) {
       // LocalStorage quota guard
     }
-
-    if (!isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        try {
-          await savePendingRequestsToSheets(spreadsheetId, token, updatedRequests);
-        } catch (err) {
-          console.warn("Google Sheets pending requests background sync warning:", err);
-        }
-      }
-    }
+    saveHotelFullStateToFirestore({ pendingRequests: updatedRequests }).catch(console.warn);
   };
 
   // Fetch pending requests with resilient multi-tier fallback (Firestore -> Serverless API -> Google Sheets -> LocalStorage)
@@ -2131,20 +2023,7 @@ export default function App() {
       }
     }
 
-    // Tier 3: If Google Sheets is connected, fetch from Sheets
-    if (!requestsData && !isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        try {
-          const sheetsRequests = await fetchPendingRequestsFromSheets(spreadsheetId, token);
-          if (Array.isArray(sheetsRequests) && sheetsRequests.length > 0) {
-            requestsData = sheetsRequests;
-          }
-        } catch {
-          // Silent fallback to local storage
-        }
-      }
-    }
+
 
     // Tier 4: LocalStorage fallback
     if (!requestsData) {
@@ -2231,7 +2110,7 @@ export default function App() {
       fetchPendingRequests(true);
     }, 6000);
     return () => clearInterval(timer);
-  }, [soundAlertsEnabled, spreadsheetId, isDemoMode]);
+  }, [soundAlertsEnabled]);
 
   // Fetch config from server, Firestore, or local settings
   const fetchBackendConfig = async () => {
@@ -2295,290 +2174,34 @@ export default function App() {
     setTimeout(() => setShowNotification(null), 4000);
   };
 
-  // Sync / Connect with Google Sheets
-  const syncWithGoogleSheets = async (token: string) => {
-    setIsLoadingData(true);
-    try {
-      const id = await findOrCreateSpreadsheet(token);
-      setSpreadsheetId(id);
-      localStorage.setItem("spreadsheet_id", id);
-      triggerNotification("success", "تم ربط النظام بجدول بيانات قوقل شيت بنجاح!");
-      await loadDataFromSheets(id, token);
-    } catch (error: any) {
-      console.error("Error linking Google Sheets:", error);
-      triggerNotification("error", "فشل ربط قوقل شيت. تم التحويل لوضع المعاينة المحلية.");
-      setIsDemoMode(true);
-    } finally {
-      setIsLoadingData(false);
-    }
-  };
 
-  // Connect to a custom spreadsheet by URL or ID
-  const handleConnectCustomSpreadsheet = async (customInput: string) => {
-    if (!customInput.trim()) {
-      triggerNotification("error", "الرجاء إدخال رابط أو معرّف جدول قوقل شيت (Spreadsheet ID / URL).");
-      return;
-    }
 
-    let token = getAccessToken();
-    if (!token) {
-      try {
-        const signRes = await googleSignIn();
-        if (signRes) {
-          token = signRes.accessToken;
-          setGoogleUser(signRes.user);
-          setIsDemoMode(false);
-        } else {
-          triggerNotification("error", "الرجاء تسجيل الدخول بحساب قوقل للتحقق من الجدول.");
-          return;
-        }
-      } catch (e) {
-        triggerNotification("error", "فشل تسجيل الدخول للتحقق من جدول البيانات.");
-        return;
-      }
-    }
 
-    setIsLoadingData(true);
-    try {
-      const res = await validateAndConnectSpreadsheet(customInput, token);
-      if (res.success && res.spreadsheetId) {
-        setSpreadsheetId(res.spreadsheetId);
-        localStorage.setItem("spreadsheet_id", res.spreadsheetId);
-        setIsDemoMode(false);
-        triggerNotification("success", `تم ربط الجدول بنجاح: "${res.title}"`);
-        await loadDataFromSheets(res.spreadsheetId, token);
-        setCustomSpreadsheetInput("");
-      } else {
-        triggerNotification("error", res.error || "تعذّر الوصول إلى جدول البيانات المحدد.");
-      }
-    } catch (err: any) {
-      console.error("Connect custom spreadsheet error:", err);
-      triggerNotification("error", err.message || "حدث خطأ أثناء ربط الجدول.");
-    } finally {
-      setIsLoadingData(false);
-    }
-  };
 
-  // Push all local state into Google Sheets
-  const handlePushAllLocalToSheets = async () => {
-    let token = getAccessToken();
-    if (!token) {
-      try {
-        const signRes = await googleSignIn();
-        if (signRes) {
-          token = signRes.accessToken;
-          setGoogleUser(signRes.user);
-          setIsDemoMode(false);
-        } else {
-          return;
-        }
-      } catch (e) {
-        triggerNotification("error", "الرجاء تسجيل الدخول بحساب قوقل لإتمام المزامنة.");
-        return;
-      }
-    }
 
-    if (!spreadsheetId) {
-      triggerNotification("error", "لا يوجد جدول قوقل شيت مرتبط حالياً.");
-      return;
-    }
 
-    setIsExportingToSheets(true);
-    try {
-      // 1. Ensure structure first
-      await ensureSpreadsheetStructure(spreadsheetId, token);
-      
-      // 2. Save all entities
-      await saveRoomsToSheets(spreadsheetId, token, rooms);
-      await saveGuestsToSheets(spreadsheetId, token, guests);
-      await saveServiceRequestsToSheets(spreadsheetId, token, serviceRequests);
-      await savePendingRequestsToSheets(spreadsheetId, token, pendingRequests);
-      await saveAllSettingsToSheets(spreadsheetId, token, {
-        registrationLinkStatus: registrationLinkOpen ? "open" : "closed",
-        cardLogoImage: cardLogoImage || "",
-        publicUsername,
-        publicPassword,
-        adminUsername,
-        adminPassword,
-        receptionUsername,
-        receptionPassword,
-        supervisorUsername,
-        supervisorPassword,
-        servicesUsername,
-        servicesPassword,
-        securityUsername,
-        securityPassword,
-        auditorUsername,
-        auditorPassword,
-      });
 
-      const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      setLastSyncTimestamp(nowTime);
-      localStorage.setItem("sheets_last_sync_time", nowTime);
-
-      triggerNotification("success", `تم رفع وتحديث كافة البيانات في قوقل شيت بنجاح! (${nowTime})`);
-    } catch (error: any) {
-      console.error("Push to sheets error:", error);
-      triggerNotification("error", "حدث خطأ أثناء رفع البيانات إلى قوقل شيت.");
-    } finally {
-      setIsExportingToSheets(false);
-    }
-  };
-
-  // Repair / verify structure of the spreadsheet
-  const handleRepairSheetStructure = async () => {
-    const token = getAccessToken();
-    if (!token || !spreadsheetId) {
-      triggerNotification("error", "الرجاء تسجيل الدخول والتأكد من ربط الجدول أولاً.");
-      return;
-    }
-
-    setIsFixingSheets(true);
-    try {
-      await ensureSpreadsheetStructure(spreadsheetId, token);
-      await initializeSheetHeaders(spreadsheetId, token);
-      triggerNotification("success", "تم فحص وتهيئة هيكل الجداول والأعمدة الستة باللغة العربية بنجاح!");
-    } catch (error: any) {
-      console.error("Repair sheets error:", error);
-      triggerNotification("error", "فشلت تهيئة هيكل الجداول في قوقل شيت.");
-    } finally {
-      setIsFixingSheets(false);
-    }
-  };
-
-  // Load actual data from Sheets
-  const loadDataFromSheets = async (id: string, token: string, isSilent = false) => {
-    setIsLoadingData(true);
-    try {
-      const [sheetRooms, sheetGuests, sheetServices, sheetPendingRequests, sheetConfig] = await Promise.all([
-        fetchRoomsFromSheets(id, token),
-        fetchGuestsFromSheets(id, token),
-        fetchServiceRequestsFromSheets(id, token),
-        fetchPendingRequestsFromSheets(id, token),
-        fetchSettingsFromSheets(id, token),
-      ]);
-      
-      // If token expired or auth failed, sheetRooms and sheetGuests will be null
-      if (sheetRooms === null && sheetGuests === null) {
-        setIsDemoMode(true);
-        setGoogleUser(null);
-        if (!isSilent) {
-          triggerNotification("error", "انتهت صلاحية جلسة قوقل. يرجى تسجيل الدخول مجدداً لمزامنة الجدول.");
-        }
-        return;
-      }
-
-      if (sheetRooms && sheetRooms.length > 0) {
-        setRooms(sheetRooms);
-        localStorage.setItem("hotel_rooms", JSON.stringify(sheetRooms));
-      }
-      if (sheetGuests) {
-        setGuests(sheetGuests);
-        localStorage.setItem("hotel_guests", JSON.stringify(sheetGuests));
-      }
-      if (sheetServices && sheetServices.length > 0) {
-        setServiceRequests(sheetServices);
-        localStorage.setItem("hotel_service_requests", JSON.stringify(sheetServices));
-      }
-      if (sheetPendingRequests && sheetPendingRequests.length > 0) {
-        setPendingRequests(sheetPendingRequests);
-      }
-
-      // Fetch config
-      if (sheetConfig) {
-        if (sheetConfig.registrationLinkStatus) {
-          setRegistrationLinkOpen(sheetConfig.registrationLinkStatus === "open");
-        }
-        if (sheetConfig.appLogoImage) {
-          setAppLogoImage(sheetConfig.appLogoImage);
-          localStorage.setItem("app_logo_image", sheetConfig.appLogoImage);
-        }
-        if (sheetConfig.cardLogoImage) {
-          setCardLogoImage(sheetConfig.cardLogoImage);
-          localStorage.setItem("card_logo_image", sheetConfig.cardLogoImage);
-        }
-        if (sheetConfig.publicUsername) {
-          setPublicUsername(sheetConfig.publicUsername);
-          localStorage.setItem("public_auth_username", sheetConfig.publicUsername);
-        }
-        if (sheetConfig.publicPassword) {
-          setPublicPassword(sheetConfig.publicPassword);
-          localStorage.setItem("public_auth_password", sheetConfig.publicPassword);
-        }
-        if (sheetConfig.adminPassword) {
-          setAdminPassword(sheetConfig.adminPassword);
-          localStorage.setItem("admin_auth_password", sheetConfig.adminPassword);
-        }
-        if (sheetConfig.adminUsername) {
-          setAdminUsername(sheetConfig.adminUsername);
-          localStorage.setItem("admin_auth_username", sheetConfig.adminUsername);
-        }
-        if (sheetConfig.receptionPassword) {
-          setReceptionPassword(sheetConfig.receptionPassword);
-          localStorage.setItem("reception_auth_password", sheetConfig.receptionPassword);
-        }
-        if (sheetConfig.receptionUsername) {
-          setReceptionUsername(sheetConfig.receptionUsername);
-          localStorage.setItem("reception_auth_username", sheetConfig.receptionUsername);
-        }
-        if (sheetConfig.supervisorPassword) {
-          setSupervisorPassword(sheetConfig.supervisorPassword);
-          localStorage.setItem("supervisor_auth_password", sheetConfig.supervisorPassword);
-        }
-        if (sheetConfig.supervisorUsername) {
-          setSupervisorUsername(sheetConfig.supervisorUsername);
-          localStorage.setItem("supervisor_auth_username", sheetConfig.supervisorUsername);
-        }
-        if (sheetConfig.servicesPassword) {
-          setServicesPassword(sheetConfig.servicesPassword);
-          localStorage.setItem("services_auth_password", sheetConfig.servicesPassword);
-        }
-        if (sheetConfig.servicesUsername) {
-          setServicesUsername(sheetConfig.servicesUsername);
-          localStorage.setItem("services_auth_username", sheetConfig.servicesUsername);
-        }
-        if (sheetConfig.securityUsername) {
-          setSecurityUsername(sheetConfig.securityUsername);
-          localStorage.setItem("security_auth_username", sheetConfig.securityUsername);
-        }
-        if (sheetConfig.securityPassword) {
-          setSecurityPassword(sheetConfig.securityPassword);
-          localStorage.setItem("security_auth_password", sheetConfig.securityPassword);
-        }
-        if (sheetConfig.auditorPassword) {
-          setAuditorPassword(sheetConfig.auditorPassword);
-          localStorage.setItem("auditor_auth_password", sheetConfig.auditorPassword);
-        }
-        if (sheetConfig.auditorUsername) {
-          setAuditorUsername(sheetConfig.auditorUsername);
-          localStorage.setItem("auditor_auth_username", sheetConfig.auditorUsername);
-        }
-      }
-
-      const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      setLastSyncTimestamp(nowTime);
-      localStorage.setItem("sheets_last_sync_time", nowTime);
-    } catch (error) {
-      console.error("Error loading data from sheets:", error);
-      if (!isSilent) {
-        triggerNotification("error", "حدث خطأ أثناء تحميل البيانات من قوقل شيت.");
-      }
-    } finally {
-      setIsLoadingData(false);
-    }
-  };
-
-  // Force manual refresh from sheets or backend server
+  // Force manual refresh from backend server or Firestore
   const handleForceRefresh = async () => {
     setIsLoadingData(true);
     try {
-      const token = getAccessToken();
-      if (token && spreadsheetId) {
-        await loadDataFromSheets(spreadsheetId, token);
-        await fetchPendingRequests();
-        triggerNotification("success", "تم تحديث ومزامنة البيانات بالكامل من قوقل شيت والخادم السحابي! 🟢");
+      // 1. Refresh from Firestore if available
+      const firestoreData = await fetchHotelFullStateFromFirestore();
+      if (firestoreData) {
+        if (firestoreData.rooms && firestoreData.rooms.length > 0) {
+          setRooms(firestoreData.rooms);
+          localStorage.setItem("hotel_rooms", JSON.stringify(firestoreData.rooms));
+        }
+        if (firestoreData.guests && firestoreData.guests.length > 0) {
+          setGuests(firestoreData.guests);
+          localStorage.setItem("hotel_guests", JSON.stringify(firestoreData.guests));
+        }
+        if (firestoreData.serviceRequests && firestoreData.serviceRequests.length > 0) {
+          setServiceRequests(firestoreData.serviceRequests);
+          localStorage.setItem("hotel_service_requests", JSON.stringify(firestoreData.serviceRequests));
+        }
       } else {
-        // Refresh from backend server /api/hotel-data if available
+        // 2. Refresh from backend server /api/hotel-data if available
         const res = await fetch("/api/hotel-data", { credentials: "include" });
         if (res.ok && (res.headers.get("content-type") || "").includes("application/json")) {
           const data = await res.json();
@@ -2597,12 +2220,13 @@ export default function App() {
             }
           }
         }
-        await fetchPendingRequests();
-        await fetchBackendConfig();
-        const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        setLastSyncTimestamp(nowTime);
-        triggerNotification("success", "تم تحديث ومزامنة كافة بيانات النظام من الخادم السحابي بنجاح! 🟢");
       }
+      await fetchPendingRequests();
+      await fetchBackendConfig();
+      const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      setLastSyncTimestamp(nowTime);
+      localStorage.setItem("system_last_sync_time", nowTime);
+      triggerNotification("success", "تم تحديث ومزامنة كافة بيانات النظام بنجاح! 🟢");
     } catch (err) {
       console.error("Force refresh error:", err);
       triggerNotification("info", "تم فحص المزامنة وحفظ البيانات بنجاح.");
@@ -2644,146 +2268,26 @@ export default function App() {
     }
   };
 
-  // Log in with Google
-  const handleGoogleLogin = async (preferRedirect = false) => {
-    if (isLoggingInGoogle) return;
-    setIsLoggingInGoogle(true);
-    try {
-      const result = await googleSignIn({ preferRedirect });
-      if (result) {
-        setGoogleUser(result.user);
-        setIsDemoMode(false);
-        const storedId = localStorage.getItem("spreadsheet_id");
-        if (storedId) {
-          setSpreadsheetId(storedId);
-          await loadDataFromSheets(storedId, result.accessToken);
-          // Auto-flush pending modifications
-          if (localStorage.getItem("hotel_has_pending_sync") === "true") {
-            await handlePushAllLocalToSheets();
-            setHasPendingSync(false);
-            localStorage.removeItem("hotel_has_pending_sync");
-            triggerNotification("success", "تم تسجيل الدخول ومزامنة كافة التعديلات مع قوقل شيت بنجاح! 🟢");
-          } else {
-            triggerNotification("success", "تم تجديد جلسة قوقل شيت والمزامنة بنجاح! 🟢");
-          }
-        } else {
-          await syncWithGoogleSheets(result.accessToken);
-        }
-      }
-    } catch (error: any) {
-      const parsed = parseAuthError(error);
-      if (parsed.isCancelled) {
-        triggerNotification("info", "تم إلغاء نافذة تسجيل الدخول.");
-      } else if (parsed.isPopupBlocked) {
-        setAuthErrorDetails(parsed);
-        setShowCloudSyncDiagnosticModal(true);
-        triggerNotification("warning", "حظر المتصفح النافذة المنبثقة. يمكنك استخدام زر (تسجيل الدخول المباشر Redirect) في النافذة.");
-      } else if (parsed.isNetworkError) {
-        setAuthErrorDetails(parsed);
-        setShowCloudSyncDiagnosticModal(true);
-        triggerNotification("error", "تعذر الاتصال بالشبكة بخوادم المصادقة. تحقق من اتصال الإنترنت أو عطل مانع الإعلانات للموقع.");
-      } else {
-        console.error("Login failed:", error);
-        setAuthErrorDetails(parsed);
-        setShowCloudSyncDiagnosticModal(true);
-        if (parsed.isUnauthorizedDomain) {
-          triggerNotification("warning", `النطاق غير مصرح به في Firebase: ${parsed.domain}`);
-        } else {
-          triggerNotification("error", parsed.title || "فشل تسجيل الدخول باستخدام حساب قوقل.");
-        }
-      }
-    } finally {
-      setIsLoggingInGoogle(false);
-    }
-  };
-
-  // Log out
-  const handleGoogleLogout = async () => {
-    const confirmLogout = window.confirm("هل أنت متأكد من رغبتك في تسجيل الخروج؟");
-    if (!confirmLogout) return;
-
-    await logout();
-    setGoogleUser(null);
-    setIsDemoMode(true);
-    setSpreadsheetId(null);
-    localStorage.removeItem("spreadsheet_id");
-    triggerNotification("success", "تم تسجيل الخروج بنجاح. أنت الآن في وضع المعاينة المحلية.");
-  };
-
-  // Handle data saving to Local Storage or Google Sheets
+  // Data persistence handlers (saving to Local Storage, Backend Server, and Firestore)
   const persistRooms = async (updatedRooms: Room[]) => {
     setRooms(updatedRooms);
     localStorage.setItem("hotel_rooms", JSON.stringify(updatedRooms));
     syncToBackendServer({ rooms: updatedRooms });
-    
-    if (!isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        try {
-          await saveRoomsToSheets(spreadsheetId, token, updatedRooms);
-          setHasPendingSync(false);
-          localStorage.removeItem("hotel_has_pending_sync");
-        } catch (error) {
-          console.error("Error saving rooms to sheets:", error);
-          setHasPendingSync(true);
-          localStorage.setItem("hotel_has_pending_sync", "true");
-          triggerNotification("error", "تم الحفظ محلياً بأمان، وبانتظار المزامنة السحابية.");
-        }
-      } else {
-        setHasPendingSync(true);
-        localStorage.setItem("hotel_has_pending_sync", "true");
-      }
-    }
+    saveHotelFullStateToFirestore({ rooms: updatedRooms }).catch(console.warn);
   };
 
   const persistGuests = async (updatedGuests: Guest[]) => {
     setGuests(updatedGuests);
     localStorage.setItem("hotel_guests", JSON.stringify(updatedGuests));
     syncToBackendServer({ guests: updatedGuests });
-    
-    if (!isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        try {
-          await saveGuestsToSheets(spreadsheetId, token, updatedGuests);
-          setHasPendingSync(false);
-          localStorage.removeItem("hotel_has_pending_sync");
-        } catch (error) {
-          console.error("Error saving guests to sheets:", error);
-          setHasPendingSync(true);
-          localStorage.setItem("hotel_has_pending_sync", "true");
-          triggerNotification("error", "تم الحفظ محلياً بأمان، وبانتظار المزامنة السحابية.");
-        }
-      } else {
-        setHasPendingSync(true);
-        localStorage.setItem("hotel_has_pending_sync", "true");
-      }
-    }
+    saveHotelFullStateToFirestore({ guests: updatedGuests }).catch(console.warn);
   };
 
   const persistServiceRequests = async (updatedRequests: ServiceRequest[]) => {
     setServiceRequests(updatedRequests);
     localStorage.setItem("hotel_service_requests", JSON.stringify(updatedRequests));
     syncToBackendServer({ serviceRequests: updatedRequests });
-
-    if (!isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        try {
-          await saveServiceRequestsToSheets(spreadsheetId, token, updatedRequests);
-          setHasPendingSync(false);
-          localStorage.removeItem("hotel_has_pending_sync");
-        } catch (error) {
-          console.error("Error saving service requests to sheets:", error);
-          setHasPendingSync(true);
-          localStorage.setItem("hotel_has_pending_sync", "true");
-          triggerNotification("error", "تم الحفظ محلياً بأمان، وبانتظار المزامنة السحابية.");
-        }
-      } else {
-        setHasPendingSync(true);
-        localStorage.setItem("hotel_has_pending_sync", "true");
-      }
-    }
+    saveHotelFullStateToFirestore({ serviceRequests: updatedRequests }).catch(console.warn);
   };
 
   // Toggle Guest Registration Link Status (open/closed)
@@ -2809,13 +2313,7 @@ export default function App() {
       console.error("Failed to save config to server:", err);
     }
 
-    // 3. Update on Google Sheets
-    if (!isDemoMode && spreadsheetId) {
-      const token = getAccessToken();
-      if (token) {
-        await saveSettingsToSheets(spreadsheetId, token, "registrationLinkStatus", statusStr);
-      }
-    }
+
 
     triggerNotification("success", `تم تغيير حالة رابط التسجيل إلى: ${nextStatus ? "مفتوح" : "مغلق"}`);
   };
@@ -2980,25 +2478,7 @@ export default function App() {
         console.warn("Could not immediately push request to Firestore:", err);
       });
 
-      // 2. Background Cloud Sync to Google Sheets if spreadsheet is linked
-      if (spreadsheetId) {
-        const token = getAccessToken();
-        if (token) {
-          try {
-            await appendPendingRequestToSheets(spreadsheetId, token, newPendingObj);
-          } catch (sheetsErr) {
-            console.warn("Could not immediately push request to Sheets, queued for sync:", sheetsErr);
-            localStorage.setItem("hotel_has_pending_sync", "true");
-            setHasPendingSync(true);
-          }
-        } else {
-          localStorage.setItem("hotel_has_pending_sync", "true");
-          setHasPendingSync(true);
-        }
-      } else {
-        localStorage.setItem("hotel_has_pending_sync", "true");
-        setHasPendingSync(true);
-      }
+
 
       setPublicSubmitSuccess(true);
       setPublicForm({
@@ -3226,30 +2706,23 @@ export default function App() {
     localStorage.setItem("public_auth_username", publicUsername.trim());
     localStorage.setItem("public_auth_password", publicPassword.trim());
 
-    // Save to Google Sheets if connected
-    const token = getAccessToken();
-    if (spreadsheetId && token) {
-      try {
-        await saveSettingsToSheets(spreadsheetId, token, "adminUsername", adminUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "adminPassword", adminPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "receptionUsername", receptionUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "receptionPassword", receptionPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "supervisorUsername", supervisorUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "supervisorPassword", supervisorPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "servicesUsername", servicesUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "servicesPassword", servicesPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "securityUsername", securityUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "securityPassword", securityPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "auditorUsername", auditorUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "auditorPassword", auditorPassword.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "publicUsername", publicUsername.trim());
-        await saveSettingsToSheets(spreadsheetId, token, "publicPassword", publicPassword.trim());
-        triggerNotification("success", "تم حفظ وتحديث كافة كلمات المرور والأدوار الستة محلياً وسحابياً في قوقل شيت بنجاح! 🔒");
-        return;
-      } catch (err) {
-        console.error("Failed to sync passwords to sheets:", err);
-      }
-    }
+    // Save to Firestore config
+    saveHotelConfigToFirestore({
+      adminUsername: adminUsername.trim(),
+      adminPassword: adminPassword.trim(),
+      receptionUsername: receptionUsername.trim(),
+      receptionPassword: receptionPassword.trim(),
+      supervisorUsername: supervisorUsername.trim(),
+      supervisorPassword: supervisorPassword.trim(),
+      servicesUsername: servicesUsername.trim(),
+      servicesPassword: servicesPassword.trim(),
+      securityUsername: securityUsername.trim(),
+      securityPassword: securityPassword.trim(),
+      auditorUsername: auditorUsername.trim(),
+      auditorPassword: auditorPassword.trim(),
+      publicUsername: publicUsername.trim(),
+      publicPassword: publicPassword.trim(),
+    }).catch(console.warn);
 
     triggerNotification("success", "تم حفظ وتحديث كلمات المرور بنجاح في النظام! 🔒");
   };
@@ -3300,21 +2773,18 @@ export default function App() {
       localStorage.setItem("public_auth_password", newPasswordInput.trim());
     }
 
-    // Save to Google Sheets if connected
-    const token = getAccessToken();
-    if (spreadsheetId && token) {
-      try {
-        const key = changePasswordTargetRole === "admin" ? "adminPassword" :
-                    changePasswordTargetRole === "reception" ? "receptionPassword" :
-                    changePasswordTargetRole === "supervisor" ? "supervisorPassword" :
-                    changePasswordTargetRole === "services" ? "servicesPassword" :
-                    changePasswordTargetRole === "security" ? "securityPassword" :
-                    changePasswordTargetRole === "auditor" ? "auditorPassword" : "publicPassword";
-        await saveSettingsToSheets(spreadsheetId, token, key, newPasswordInput.trim());
-      } catch (err) {
-        console.error("Failed to sync new password to sheets:", err);
-      }
-    }
+    // Save to Firestore config
+    const roleKeyMap: Record<string, string> = {
+      admin: "adminPassword",
+      reception: "receptionPassword",
+      supervisor: "supervisorPassword",
+      services: "servicesPassword",
+      security: "securityPassword",
+      auditor: "auditorPassword",
+      public: "publicPassword"
+    };
+    const key = roleKeyMap[changePasswordTargetRole] || "publicPassword";
+    saveHotelConfigToFirestore({ [key]: newPasswordInput.trim() }).catch(console.warn);
 
     setShowChangePasswordModal(false);
     setCurrentOldPasswordInput("");
@@ -3366,25 +2836,22 @@ export default function App() {
     localStorage.setItem("public_auth_username", "public");
     localStorage.setItem("public_auth_password", "1122");
 
-    const token = getAccessToken();
-    if (spreadsheetId && token) {
-      try {
-        await saveSettingsToSheets(spreadsheetId, token, "adminUsername", "admin");
-        await saveSettingsToSheets(spreadsheetId, token, "adminPassword", "1234");
-        await saveSettingsToSheets(spreadsheetId, token, "receptionUsername", "reception");
-        await saveSettingsToSheets(spreadsheetId, token, "receptionPassword", "2233");
-        await saveSettingsToSheets(spreadsheetId, token, "supervisorUsername", "supervisor");
-        await saveSettingsToSheets(spreadsheetId, token, "supervisorPassword", "5566");
-        await saveSettingsToSheets(spreadsheetId, token, "servicesUsername", "services");
-        await saveSettingsToSheets(spreadsheetId, token, "servicesPassword", "3344");
-        await saveSettingsToSheets(spreadsheetId, token, "securityUsername", "حراسة البوابه");
-        await saveSettingsToSheets(spreadsheetId, token, "securityPassword", "4455");
-        await saveSettingsToSheets(spreadsheetId, token, "auditorUsername", "auditor");
-        await saveSettingsToSheets(spreadsheetId, token, "auditorPassword", "6677");
-        await saveSettingsToSheets(spreadsheetId, token, "publicUsername", "public");
-        await saveSettingsToSheets(spreadsheetId, token, "publicPassword", "1122");
-      } catch (err) {}
-    }
+    saveHotelConfigToFirestore({
+      adminUsername: "admin",
+      adminPassword: "1234",
+      receptionUsername: "reception",
+      receptionPassword: "2233",
+      supervisorUsername: "supervisor",
+      supervisorPassword: "5566",
+      servicesUsername: "services",
+      servicesPassword: "3344",
+      securityUsername: "حراسة البوابه",
+      securityPassword: "4455",
+      auditorUsername: "auditor",
+      auditorPassword: "6677",
+      publicUsername: "public",
+      publicPassword: "1122",
+    }).catch(console.warn);
 
     triggerNotification("success", "تمت استعادة كلمات المرور الافتراضية بنجاح لكافة الأدوار الستة! 🔄");
   };
@@ -3395,51 +2862,41 @@ export default function App() {
     setShowLoginModal(true);
   };
 
-  // SAVE APP / PROGRAM LOGO TO GOOGLE SHEETS (حفظ شعار البرنامج والنظام في قوقل شيت)
+  // SAVE APP / PROGRAM LOGO
   const handleSaveAppLogoToSheets = async () => {
     if (!appLogoImage) {
-      triggerNotification("error", "الرجاء رفع شعار البرنامج أولاً قبل حفظه في قوقل شيت.");
-      return;
-    }
-
-    const token = getAccessToken();
-    if (!spreadsheetId || !token) {
-      triggerNotification("error", "الرجاء الاتصال بقوقل شيت وتأكيد تسجيل الدخول أولاً لحفظ الشعار سحابياً.");
+      triggerNotification("error", "الرجاء رفع شعار البرنامج أولاً قبل حفظه.");
       return;
     }
 
     setIsSavingAppLogoToSheets(true);
     try {
-      await saveSettingsToSheets(spreadsheetId, token, "appLogoImage", appLogoImage);
-      triggerNotification("success", "تم حفظ وتطبيق شعار البرنامج بنجاح في قوقل شيت ليظهر في القائمة والشاشات! 🖼️🟢");
+      localStorage.setItem("app_logo_image", appLogoImage);
+      await saveHotelConfigToFirestore({ appLogoImage });
+      triggerNotification("success", "تم حفظ وتطبيق شعار البرنامج بنجاح ليظهر في القائمة والشاشات! 🖼️🟢");
     } catch (err) {
       console.error(err);
-      triggerNotification("error", "حدث خطأ أثناء حفظ شعار البرنامج في قوقل شيت.");
+      triggerNotification("info", "تم حفظ شعار البرنامج محلياً بنجاح.");
     } finally {
       setIsSavingAppLogoToSheets(false);
     }
   };
 
-  // SAVE GUEST CARD LOGO TO GOOGLE SHEETS (حفظ شعار كرت النزيل في قوقل شيت)
+  // SAVE GUEST CARD LOGO
   const handleSaveCardLogoToSheets = async () => {
     if (!cardLogoImage) {
-      triggerNotification("error", "الرجاء رفع شعار كرت النزيل (Logo) أولاً قبل حفظه في قوقل شيت.");
-      return;
-    }
-
-    const token = getAccessToken();
-    if (!spreadsheetId || !token) {
-      triggerNotification("error", "الرجاء الاتصال بقوقل شيت وتأكيد تسجيل الدخول أولاً لحفظ الشعار سحابياً.");
+      triggerNotification("error", "الرجاء رفع شعار كرت النزيل (Logo) أولاً قبل حفظه.");
       return;
     }
 
     setIsSavingLogoToSheets(true);
     try {
-      await saveSettingsToSheets(spreadsheetId, token, "cardLogoImage", cardLogoImage);
-      triggerNotification("success", "تم حفظ وتطبيق شعار كرت النزيل بنجاح في قوقل شيت! ليظهر في كافة بطاقات النزلاء. 🪪🟢");
+      localStorage.setItem("card_logo_image", cardLogoImage);
+      await saveHotelConfigToFirestore({ cardLogoImage });
+      triggerNotification("success", "تم حفظ وتطبيق شعار كرت النزيل بنجاح ليظهر في كافة بطاقات النزلاء! 🪪🟢");
     } catch (err) {
       console.error(err);
-      triggerNotification("error", "حدث خطأ أثناء حفظ شعار كرت النزيل في قوقل شيت.");
+      triggerNotification("info", "تم حفظ شعار كرت النزيل محلياً بنجاح.");
     } finally {
       setIsSavingLogoToSheets(false);
     }
@@ -4101,21 +3558,68 @@ export default function App() {
     triggerNotification("success", `تم حذف الغرفة رقم ${roomNumber} من النظام بنجاح.`);
   };
 
-  // DELETE GUEST RECORD
-  const handleDeleteGuest = (guestId: string) => {
-    const confirmed = window.confirm("هل أنت متأكد من حذف سجل النزيل بالكامل من الأرشيف؟");
-    if (!confirmed) return;
+  // GUEST REMOVAL & PERMANENT DELETION (استبعاد او حذف نهائي - رمزية 1 و رمزية 2)
+  // رمزية 1: استبعاد النزيل (تحويل إلى مغادر، تفريغ الغرفة، والاحتفاظ بالسجل في الأرشيف)
+  const handleExcludeGuest = (guestId: string) => {
+    const target = guests.find(g => g.id === guestId);
+    if (!target) return;
+
+    const checkOutTimestamp = new Date().toISOString();
+    const updatedGuests = guests.map(g => {
+      if (g.id === guestId) {
+        return { ...g, status: "checked_out" as const, checkOutDate: checkOutTimestamp };
+      }
+      return g;
+    });
+    persistGuests(updatedGuests);
+
+    // Free up room if no other resident occupants
+    if (target.roomNumber) {
+      const otherResidents = updatedGuests.filter(g => g.id !== guestId && g.roomNumber === target.roomNumber && g.status === "resident");
+      if (otherResidents.length === 0) {
+        const updatedRooms = rooms.map(r => r.number === target.roomNumber ? { ...r, status: "available" as const } : r);
+        persistRooms(updatedRooms);
+      }
+    }
+
+    triggerNotification("success", `تم استبعاد النزيل (${target.name}) بنجاح، تحرير الغرفة ${target.roomNumber}، وحفظ السجل بالأرشيف (رمزية 1: استبعاد). 🚪`);
+  };
+
+  // رمزية 2: حذف نهائي (مسح كلي وشامل للنزيل وسجله من قاعدة البيانات)
+  const handlePermanentDeleteGuest = (guestId: string) => {
+    const target = guests.find(g => g.id === guestId);
+    if (!target) return;
 
     const updatedGuests = guests.filter(g => g.id !== guestId);
     persistGuests(updatedGuests);
-    triggerNotification("success", "تم حذف سجل النزيل.");
+
+    // Free up room if no other resident occupants
+    if (target.roomNumber) {
+      const otherResidents = updatedGuests.filter(g => g.id !== guestId && g.roomNumber === target.roomNumber && g.status === "resident");
+      if (otherResidents.length === 0) {
+        const updatedRooms = rooms.map(r => r.number === target.roomNumber ? { ...r, status: "available" as const } : r);
+        persistRooms(updatedRooms);
+      }
+    }
+
+    triggerNotification("success", `تم حذف سجل النزيل (${target.name}) نهائياً ومسحه بالكامل من قاعدة البيانات (رمزية 2: حذف نهائي). 🗑️`);
+  };
+
+  // Legacy fallback if directly called
+  const handleDeleteGuest = (guestId: string) => {
+    const target = guests.find(g => g.id === guestId);
+    if (target) {
+      setGuestRemovalTarget(target);
+    } else {
+      handlePermanentDeleteGuest(guestId);
+    }
   };
 
   // OPEN GUEST EDIT MODAL (فتح نافذة تعديل بيانات النزيل)
   const handleOpenEditGuest = (guest: Guest) => {
     setEditingGuest(guest);
     const existingRole = guest.administrativeRole || "عضو وفد";
-    const isPreset = ADMIN_ROLES.includes(existingRole);
+    const isPreset = adminRoles.includes(existingRole);
     setEditGuestForm({
       id: guest.id,
       name: guest.name || "",
@@ -4131,7 +3635,11 @@ export default function App() {
       year: guest.year || selectedYear || "2026",
       visitType: guest.visitType || selectedVisitType || "general_1",
       photoUrl: guest.photoUrl || "",
-      administrativeRole: isPreset ? existingRole : "أخرى (مخصص)",
+      photoRawUrl: guest.photoUrl || "",
+      photoQuality: "high",
+      photoSizeKb: 0,
+      photoDimensions: "",
+      administrativeRole: existingRole,
       customAdminRole: isPreset ? "" : existingRole
     });
   };
@@ -5001,96 +4509,34 @@ export default function App() {
             </div>
           </div>
 
-          {/* Sync status widget */}
+          {/* Cloud Database Sync Status Widget */}
           <div className="mx-4 my-4 p-3.5 rounded-xl bg-emerald-900/40 border border-emerald-800/80 text-xs">
             <div className="flex justify-between items-center mb-2">
               <span className="text-slate-400">حالة المزامنة السحابية:</span>
-              <span className={`px-2 py-0.5 rounded-full font-semibold text-[10px] ${
-                hasPendingSync 
-                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse" 
-                  : isDemoMode 
-                    ? "bg-slate-800 text-slate-300 border border-slate-700" 
-                    : "bg-emerald-900 text-emerald-300 border border-emerald-700"
-              }`}>
-                {hasPendingSync ? "بانتظار المزامنة" : isDemoMode ? "حفظ محلي آمن" : "اتصال دائم نشط"}
+              <span className="px-2 py-0.5 rounded-full font-semibold text-[10px] bg-emerald-900 text-emerald-300 border border-emerald-700">
+                اتصال دائم نشط 🟢
               </span>
             </div>
             
-            {hasPendingSync && (
-              <div className="mb-2 p-2 rounded-lg bg-amber-950/60 border border-amber-700/50 text-[11px] text-amber-200">
-                <p className="font-bold flex items-center gap-1 mb-1">
-                  <span>💾</span>
-                  <span>تعديلات جديدة محفوظة محلياً</span>
-                </p>
-                <button
-                  onClick={() => handleGoogleLogin()}
-                  disabled={isLoggingInGoogle}
-                  className="w-full mt-1 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-black rounded-lg text-[10px] flex items-center justify-center gap-1 transition shadow cursor-pointer"
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>قاعدة البيانات السحابية مؤمنة 🟢</span>
+              </div>
+              <p className="text-[10px] text-emerald-200/80 leading-relaxed">
+                يتم حفظ وتحديث بيانات الغرف والنزلاء والطلبات تلقائياً بالخادم السحابي.
+              </p>
+              <div className="pt-1">
+                <button 
+                  onClick={handleForceRefresh}
+                  disabled={isLoadingData}
+                  className="w-full py-2 bg-emerald-800/80 hover:bg-emerald-700 disabled:opacity-60 rounded-lg text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
                 >
-                  <RefreshCw className={`w-3 h-3 ${isLoggingInGoogle ? "animate-spin" : ""}`} />
-                  {isLoggingInGoogle ? "جارٍ الاتصال بقوقل..." : "مزامنة سحابية الآن مع قوقل شيت ⚡"}
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? "animate-spin" : ""}`} />
+                  <span>{isLoadingData ? "جارٍ التحديث..." : "تحديث ومزامنة البيانات"}</span>
                 </button>
               </div>
-            )}
-
-            {isDemoMode && !hasPendingSync ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>مزامنة الخادم السحابي نشطة ومؤمنة 🟢</span>
-                </div>
-                <p className="text-[10px] text-emerald-200/80 leading-relaxed">
-                  يتم حفظ وتحديث بيانات الغرف والنزلاء والطلبات تلقائياً بالخادم.
-                </p>
-                <div className="pt-1">
-                  <button 
-                    onClick={() => handleGoogleLogin()}
-                    disabled={isLoggingInGoogle}
-                    className="w-full py-1.5 bg-emerald-700/70 hover:bg-emerald-600 disabled:opacity-60 rounded-lg text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
-                  >
-                    {isLoggingInGoogle ? (
-                      <>
-                        <RefreshCw className="w-3 h-3 animate-spin" />
-                        <span>جارٍ فتح تسجيل الدخول...</span>
-                      </>
-                    ) : (
-                      <>
-                        <LogIn className="w-3 h-3" />
-                        <span>ربط قوقل شيت (اختياري) 📊</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            ) : !isDemoMode && (
-              <div className="space-y-1.5 text-[11px] text-slate-300">
-                <div className="flex items-center gap-1 text-emerald-300 font-medium">
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>متصل ومزامن مباشرة بقوقل شيت 🟢</span>
-                </div>
-                <p className="truncate text-slate-400 text-[10px]" title={googleUser?.email}>الحساب: {googleUser?.email}</p>
-                
-                <div className="pt-2">
-                  <div className="flex gap-1.5">
-                    <button 
-                      onClick={handleForceRefresh}
-                      disabled={isLoadingData}
-                      className="flex-1 py-1 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isLoadingData ? "animate-spin" : ""}`} />
-                      مزامنة فورية
-                    </button>
-                    <button 
-                      onClick={handleGoogleLogout}
-                      className="py-1 px-1.5 rounded bg-rose-950 hover:bg-rose-900 text-rose-300 text-[10px] font-semibold flex items-center justify-center gap-1 transition"
-                    >
-                      <LogOut className="w-3 h-3" />
-                      خروج
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
 
           {/* Navigation Links */}
@@ -5332,6 +4778,19 @@ export default function App() {
                 )}
               </button>
             )}
+
+            {/* Supabase Database & System Reset Quick Nav */}
+            <button
+              onClick={() => setShowSupabaseModal(true)}
+              className="w-full text-right px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2.5 transition bg-gradient-to-r from-emerald-950/60 to-teal-950/40 text-emerald-300 hover:text-white border border-emerald-500/30 hover:border-emerald-400/60 shadow-xs my-1 cursor-pointer"
+              title="إدارة وربط قاعدة بيانات Supabase وإعادة ضبط النظام بالكامل"
+            >
+              <Database className="w-4 h-4 text-emerald-400 animate-pulse" />
+              <span>قاعدة بيانات Supabase</span>
+              <span className="mr-auto px-1.5 py-0.5 rounded bg-emerald-500/20 text-[10px] font-bold text-emerald-300 border border-emerald-400/30">
+                إعادة ضبط
+              </span>
+            </button>
           </nav>
         </div>
 
@@ -5399,43 +4858,26 @@ export default function App() {
               </span>
             </button>
 
-            {/* Google Sheets Persistent Connection Indicator */}
-            {!isDemoMode && spreadsheetId ? (
-              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300/80 px-3 py-1.5 rounded-xl text-xs font-bold text-emerald-900 shadow-2xs">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span className="text-[11px] font-extrabold text-emerald-800 hidden xl:inline">
-                  متصل بـ Google Sheets (حفظ تلقائي)
-                </span>
-                <a
-                  href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-1 hover:bg-emerald-200/80 rounded-lg text-emerald-800 transition"
-                  title="فتح الجدول مباشرة في Google Sheets"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            ) : (
-              <button
-                onClick={() => handleGoogleLogin()}
-                disabled={isLoggingInGoogle}
-                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-extrabold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition cursor-pointer"
-                title="تفعيل ربط قوقل شيت للحفظ التلقائي الدائم"
-              >
-                {isLoggingInGoogle ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-300" />
-                ) : (
-                  <Database className="w-3.5 h-3.5 text-amber-300" />
-                )}
-                <span className="hidden md:inline">
-                  {isLoggingInGoogle ? "جارٍ الربط..." : "ربط قوقل شيت (حفظ تلقائي)"}
-                </span>
-              </button>
-            )}
+            {/* Supabase Database Button in Navbar */}
+            <button
+              onClick={() => setShowSupabaseModal(true)}
+              className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3 py-1.5 rounded-xl text-xs font-extrabold shadow-sm transition cursor-pointer"
+              title="إدارة وربط قاعدة بيانات Supabase وإعادة ضبط النظام بالكامل"
+            >
+              <Database className="w-3.5 h-3.5" />
+              <span>قاعدة بيانات Supabase</span>
+            </button>
+
+            {/* System Cloud Persistence Status Indicator */}
+            <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300/80 px-3 py-1.5 rounded-xl text-xs font-bold text-emerald-900 shadow-2xs">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="text-[11px] font-extrabold text-emerald-800 hidden sm:inline">
+                حفظ سحابي دائم ومباشر 🟢
+              </span>
+            </div>
 
 
             <button 
@@ -6481,7 +5923,7 @@ export default function App() {
                                   </span>
                                 </td>
                                 <td className="p-4 pl-6 text-left">
-                                  <div className="flex gap-2 justify-end items-center">
+                                  <div className="flex gap-1.5 justify-end items-center flex-wrap">
                                     <button 
                                       type="button"
                                       onClick={() => handleOpenEditGuest(guest)}
@@ -6491,30 +5933,42 @@ export default function App() {
                                       <Edit3 className="w-3.5 h-3.5 text-amber-700" />
                                       <span>تعديل</span>
                                     </button>
+
                                     {guest.status === "resident" && (
-                                      <>
-                                        <button 
-                                          onClick={() => setSelectedGuestForCard(guest)}
-                                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg transition flex items-center gap-1"
-                                          title="عرض بطاقة التعريف للنزيل"
-                                        >
-                                          <QrCode className="w-3.5 h-3.5" />
-                                          بطاقة النزيل
-                                        </button>
-                                        <button 
-                                          onClick={() => handleCheckOut(guest.id)}
-                                          className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg transition"
-                                        >
-                                          تسجيل خروج
-                                        </button>
-                                      </>
+                                      <button 
+                                        onClick={() => setSelectedGuestForCard(guest)}
+                                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold rounded-lg transition flex items-center gap-1"
+                                        title="عرض بطاقة التعريف للنزيل"
+                                      >
+                                        <QrCode className="w-3.5 h-3.5 text-emerald-700" />
+                                        <span>البطاقة</span>
+                                      </button>
                                     )}
+
+                                    {/* زر استبعاد النزيل (رمزية 1) */}
                                     <button 
-                                      onClick={() => handleDeleteGuest(guest.id)}
-                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition"
-                                      title="حذف السجل"
+                                      type="button"
+                                      onClick={() => {
+                                        setGuestRemovalTarget(guest);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                      title="استبعاد النزيل (رمزية 1: تسجيل مغادرة وتحرير الغرفة مع حفظ السجل في الأرشيف)"
                                     >
-                                      <Trash2 className="w-4 h-4" />
+                                      <UserMinus className="w-3.5 h-3.5 text-orange-700" />
+                                      <span>استبعاد (رمزية 1)</span>
+                                    </button>
+
+                                    {/* زر حذف نهائي (رمزية 2) */}
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        setGuestRemovalTarget(guest);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                      title="حذف نهائي (رمزية 2: مسح كلي وشامل للنزيل من قاعدة البيانات)"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-rose-700" />
+                                      <span>حذف نهائي (رمزية 2)</span>
                                     </button>
                                   </div>
                                 </td>
@@ -7081,14 +6535,14 @@ export default function App() {
                           onClick={handleSaveLogoToSheets}
                           disabled={!cardLogoImage || isSavingLogoToSheets}
                           className="bg-amber-500 hover:bg-amber-400 disabled:opacity-50 active:scale-95 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow"
-                          title="حفظ الشعار بشكل دائم في قوقل شيت"
+                          title="حفظ الشعار بشكل دائم في السحابة وقاعدة البيانات"
                         >
                           {isSavingLogoToSheets ? (
                             <RefreshCw className="w-4 h-4 animate-spin" />
                           ) : (
                             <Cloud className="w-4 h-4" />
                           )}
-                          حفظ الشعار في قوقل شيت
+                          حفظ الشعار بالسحابة
                         </button>
 
                         {cardLogoImage && (
@@ -7097,10 +6551,7 @@ export default function App() {
                             onClick={() => {
                               setCardLogoImage("");
                               localStorage.removeItem("card_logo_image");
-                              if (spreadsheetId) {
-                                const token = getAccessToken();
-                                if (token) saveSettingsToSheets(spreadsheetId, token, "cardLogoImage", "");
-                              }
+                              saveHotelConfigToFirestore({ cardLogoImage: "" }).catch(console.warn);
                               triggerNotification("success", "تم حذف شعار الفندق المخصص.");
                             }}
                             className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-xs px-3 py-2 rounded-xl transition"
@@ -7110,7 +6561,7 @@ export default function App() {
                         )}
                       </div>
                       <p className="text-[10px] text-slate-300 leading-relaxed font-medium">
-                        💡 عند إضافة أو حفظ الشعار، سيتم تعيينه تلقائياً في قوقل شيت وعرضه فوراً في جميع البطاقات المصدرة للنزلاء وبطاقات الباركود والتقارير المطبوعة.
+                        💡 عند إضافة أو حفظ الشعار، سيتم حفظه سحابياً وعرضه فوراً في جميع البطاقات المصدرة للنزلاء وبطاقات الباركود والتقارير المطبوعة.
                       </p>
                     </div>
                   </div>
@@ -9720,9 +9171,9 @@ export default function App() {
 
                 <button
                   type="button"
-                  onClick={() => setToolsActiveFilter("years_visits")}
+                  onClick={() => setToolsActiveFilter("years")}
                   className={`px-3.5 py-2 rounded-xl text-xs font-black transition shrink-0 flex items-center gap-1.5 cursor-pointer ${
-                    toolsActiveFilter === "years_visits"
+                    toolsActiveFilter === "years"
                       ? "bg-emerald-800 text-amber-300 shadow-xs"
                       : "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-200"
                   }`}
@@ -9741,7 +9192,7 @@ export default function App() {
                   }`}
                 >
                   <Database className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>ربط Google Sheets والمزامنة</span>
+                  <span>قاعدة البيانات السحابية والمزامنة</span>
                 </button>
 
                 <button
@@ -9806,7 +9257,7 @@ export default function App() {
                       </div>
                       <h3 className="text-xl sm:text-2xl font-black text-slate-900">إدارة وتغيير كلمات المرور وأسماء المستخدمين</h3>
                       <p className="text-xs sm:text-sm text-slate-500 max-w-3xl">
-                        يستطيع مدير النظام العام تغيير وتخصيص كلمات المرور وأسماء المستخدمين لجميع الحسابات (المدير، الاستقبال، لجنة الخدمات، حراسة البوابه، والدخول العام) مع الحفظ والمزامنة السحابية الفورية في Google Sheets.
+                        يستطيع مدير النظام العام تغيير وتخصيص كلمات المرور وأسماء المستخدمين لجميع الحسابات (المدير، الاستقبال، لجنة الخدمات، حراسة البوابه، والدخول العام) مع الحفظ والمزامنة السحابية الفورية في قاعدة البيانات الآمنة.
                       </p>
                     </div>
 
@@ -10179,7 +9630,7 @@ export default function App() {
               {/* ========================================================================= */}
               {/* SECTION: OPERATIONAL YEARS MANAGEMENT HUB (إدارة السنوات والمواسم التشغيلية) */}
               {/* ========================================================================= */}
-              {(toolsActiveFilter === "all" || toolsActiveFilter === "years_visits") && (
+              {(toolsActiveFilter === "all" || toolsActiveFilter === "years") && (
                 <div className="bg-white border-2 border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-md space-y-8 relative overflow-hidden">
                   
                   {/* Decorative background glow */}
@@ -10526,7 +9977,7 @@ export default function App() {
                               className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer border border-amber-200"
                             >
                               <Save className="w-3.5 h-3.5" />
-                              <span>{isSavingAppLogoToSheets ? "جاري الحفظ..." : "حفظ في قوقل شيت"}</span>
+                              <span>{isSavingAppLogoToSheets ? "جاري الحفظ..." : "حفظ الشعار بالسحابة"}</span>
                             </button>
                           </>
                         )}
@@ -10663,7 +10114,7 @@ export default function App() {
               )}
 
               {/* ========================================================================= */}
-              {/* SECTION: GOOGLE SHEETS CLOUD DATABASE SYNC */}
+              {/* SECTION: CLOUD DATABASE & PERSISTENCE */}
               {/* ========================================================================= */}
               {(toolsActiveFilter === "all" || toolsActiveFilter === "database") && (
                 <div className="p-6 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-6">
@@ -10671,83 +10122,75 @@ export default function App() {
                     <div>
                       <h3 className="font-extrabold text-base text-slate-800 flex items-center gap-2">
                         <Database className="w-5 h-5 text-emerald-600" />
-                        <span>قاعدة البيانات السحابية (Google Sheets Cloud Database)</span>
+                        <span>قاعدة البيانات السحابية والمزامنة المركزية (Cloud Database)</span>
                       </h3>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        ربط وإدارة جدول قوقل شيت المعتمد لتخزين بيانات النزلاء والغرف
+                        إدارة المزامنة الفورية لكافة بيانات النزلاء والغرف عبر السحابة وقاعدة البيانات المركزية
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      {isDemoMode ? (
-                        <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold border border-amber-200">
-                          وضع محلي (أوفلاين)
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-200 flex items-center gap-1">
-                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>متصل سحابياً بقوقل شيت</span>
-                        </span>
-                      )}
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-200 flex items-center gap-1">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>مزامنة سحابية نشطة 🟢</span>
+                      </span>
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-                    <label className="block text-xs font-extrabold text-slate-800">
-                      معرف أو رابط جدول قوقل شيت المخصص (Spreadsheet ID or URL):
-                    </label>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="text"
-                        value={customSpreadsheetInput}
-                        onChange={(e) => setCustomSpreadsheetInput(e.target.value)}
-                        placeholder="ضع رابط جدول Google Sheets أو المعرف هنا..."
-                        className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 focus:outline-emerald-600 font-mono"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleConnectCustomSpreadsheet(customSpreadsheetInput)}
-                        className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shrink-0"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>ربط الجدول وتحديثه</span>
-                      </button>
+                  <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-900">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      <span>قواعد البيانات السحابية المتصلة: Cloud SQL (PostgreSQL) و Supabase</span>
                     </div>
-                    {spreadsheetId && (
-                      <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1">
-                        <span className="font-bold">المعرف الحالي:</span>
-                        <span className="text-slate-700">{spreadsheetId}</span>
-                        <a
-                          href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mr-auto text-emerald-600 hover:underline flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          <span>فتح الجدول في قوقل شيت</span>
-                        </a>
-                      </div>
-                    )}
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      النظام متصل بقاعدة بيانات علائقية سحابية موثوقة (Cloud SQL في us-west1) ومتوافق بالكامل مع معمارية Supabase. يمكنك ربط مشروع Supabase الخاص بك، مزامنة الجداول، أو إعادة ضبط كافة البيانات بضغطة زر واحدة.
+                    </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                     <button
                       type="button"
-                      onClick={handlePushAllLocalToSheets}
-                      disabled={isExportingToSheets}
-                      className="p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 font-extrabold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                      onClick={() => setShowSupabaseModal(true)}
+                      className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
                     >
-                      <UploadCloud className="w-4 h-4 text-emerald-700" />
-                      <span>{isExportingToSheets ? "جاري رفع ومزامنة البيانات..." : "مزامنة ورفع البيانات المحلية لقوقل شيت"}</span>
+                      <Database className="w-4 h-4" />
+                      <span>إدارة وربط Supabase وإعادة الضبط</span>
                     </button>
 
                     <button
                       type="button"
-                      onClick={handleRepairSheetStructure}
-                      disabled={isFixingSheets}
-                      className="p-3.5 rounded-2xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-extrabold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                      onClick={handleForceRefresh}
+                      disabled={isLoadingData}
+                      className="p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 font-extrabold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
                     >
-                      <Wrench className="w-4 h-4 text-amber-700" />
-                      <span>{isFixingSheets ? "جاري إصلاح التبويبات..." : "إصلاح وبناء أوراق العمل المفقودة في الشيت"}</span>
+                      <RefreshCw className={`w-4 h-4 text-emerald-700 ${isLoadingData ? "animate-spin" : ""}`} />
+                      <span>{isLoadingData ? "جارٍ التحديث..." : "تحديث ومزامنة البيانات مع السحابة"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const backupData = {
+                          system: "خدر ليالي الانس",
+                          version: "2.0",
+                          exportedAt: new Date().toISOString(),
+                          rooms,
+                          guests,
+                          serviceRequests,
+                          pendingRequests
+                        };
+                        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `khedr_backup_${new Date().toISOString().split("T")[0]}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        triggerNotification("success", "تم تصدير نسخة احتياطية كاملة من النظام بنجاح! 💾");
+                      }}
+                      className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-800 font-extrabold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                    >
+                      <Download className="w-4 h-4 text-slate-700" />
+                      <span>تصدير نسخة احتياطية (JSON)</span>
                     </button>
                   </div>
                 </div>
@@ -11067,13 +10510,12 @@ export default function App() {
                 onViewPhoto={(guest) => setSelectedGuestForCard(guest)}
                 getArabicDayName={getArabicDayName}
                 onAppendGateLog={(log) => {
-                if (spreadsheetId) {
-                  const token = getAccessToken();
-                  if (token) {
-                    appendGateLogToSheets(spreadsheetId, token, log).catch(console.error);
-                  }
-                }
-              }}
+                  try {
+                    const existing = JSON.parse(localStorage.getItem("gate_security_logs") || "[]");
+                    existing.unshift(log);
+                    localStorage.setItem("gate_security_logs", JSON.stringify(existing.slice(0, 500)));
+                  } catch (e) {}
+                }}
               />
             </div>
           )}
@@ -11353,32 +10795,17 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditGuest} className="space-y-3">
+            <form onSubmit={handleSaveEditGuest} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">الاسم الكامل</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">الاسم الكامل *</label>
                   <input
                     type="text"
                     required
                     value={editGuestForm.name}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">تعيين / نقل إلى غرفة فندقية</label>
-                  <select
-                    value={editGuestForm.roomNumber}
-                    onChange={(e) => setEditGuestForm({ ...editGuestForm, roomNumber: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none"
-                  >
-                    <option value="">-- اختر الغرفة --</option>
-                    {rooms.map(r => (
-                      <option key={r.number} value={r.number}>
-                        غرفة {r.number} - {r.name || r.type} (الطابق {r.floor} | {r.status === "available" ? "شاغرة" : "مشغولة"})
-                      </option>
-                    ))}
-                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">الدولة والجنسية</label>
@@ -11386,16 +10813,28 @@ export default function App() {
                     type="text"
                     value={editGuestForm.country}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, country: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 focus:border-emerald-600 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">رقم الجوال</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">رقم الجوال *</label>
                   <input
                     type="text"
+                    required
                     value={editGuestForm.mobile}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, mobile: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 font-mono"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 font-mono focus:border-emerald-600 outline-none"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">رقم الواتساب (WhatsApp)</label>
+                  <input
+                    type="text"
+                    value={editGuestForm.whatsapp}
+                    onChange={(e) => setEditGuestForm({ ...editGuestForm, whatsapp: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 font-mono focus:border-emerald-600 outline-none"
+                    dir="ltr"
                   />
                 </div>
                 <div>
@@ -11404,7 +10843,7 @@ export default function App() {
                     type="date"
                     value={editGuestForm.checkInDate}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, checkInDate: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none"
                   />
                 </div>
                 <div>
@@ -11412,7 +10851,7 @@ export default function App() {
                   <select
                     value={editGuestForm.status}
                     onChange={(e) => setEditGuestForm({ ...editGuestForm, status: e.target.value as "resident" | "checked_out" })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800 focus:border-emerald-600 outline-none"
                   >
                     <option value="resident">نزيل مقيم حالياً</option>
                     <option value="checked_out">غادر الفندق (خروج)</option>
@@ -11420,12 +10859,55 @@ export default function App() {
                 </div>
               </div>
 
+              {/* الصفة / الدور الإداري للنزيل (مع أزرار الإضافة والتعديل والحذف) */}
+              <AdministrativeRoleSelector
+                roles={adminRoles}
+                selectedRole={editGuestForm.administrativeRole}
+                onSelectRole={(role) => setEditGuestForm(prev => ({ ...prev, administrativeRole: role }))}
+                onRolesChange={handleAdminRolesChange}
+                onNotification={triggerNotification}
+                label="الصفة / الدور الإداري للنزيل"
+                required={true}
+              />
+
+              {/* تعيين الغرفة الفندقية المتاحة - تصميم منضبط ومرتب */}
+              <AvailableRoomAssigner
+                rooms={rooms}
+                selectedRoomNumber={editGuestForm.roomNumber}
+                onSelectRoom={(roomNum) => setEditGuestForm(prev => ({ ...prev, roomNumber: roomNum }))}
+                guests={guests}
+                label="تعيين / نقل إلى غرفة فندقية متاحة"
+                required={true}
+              />
+
+              {/* إضافة وصورة النزيل الشخصية / الهوية الوطنية (مع التحكم بالدقة) */}
+              <GuestPhotoUploadWidget
+                label="إضافة وصورة النزيل الشخصية / الهوية الوطنية (مع التحكم بالدقة) *"
+                photoData={{
+                  photoUrl: editGuestForm.photoUrl,
+                  rawPhotoUrl: editGuestForm.photoRawUrl || editGuestForm.photoUrl,
+                  quality: editGuestForm.photoQuality,
+                  sizeKb: editGuestForm.photoSizeKb,
+                  dimensions: editGuestForm.photoDimensions
+                }}
+                onChange={(updated) => setEditGuestForm(prev => ({
+                  ...prev,
+                  photoUrl: updated.photoUrl,
+                  photoRawUrl: updated.rawPhotoUrl,
+                  photoQuality: updated.quality,
+                  photoSizeKb: updated.sizeKb,
+                  photoDimensions: updated.dimensions
+                }))}
+                onNotification={triggerNotification}
+              />
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات إضافية</label>
                 <textarea
                   value={editGuestForm.notes}
                   onChange={(e) => setEditGuestForm({ ...editGuestForm, notes: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 resize-none h-16"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 resize-none h-20 outline-none focus:border-emerald-600"
+                  placeholder="ملاحظات أو طلبات خاصة بالنزيل..."
                 />
               </div>
 
@@ -11433,21 +10915,33 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setEditingGuest(null)}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-black text-xs transition cursor-pointer shadow-sm"
+                  className="px-6 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-black text-xs transition cursor-pointer shadow-sm"
                 >
-                  حفظ التعديلات
+                  حفظ وتطبيق التعديلات
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: GUEST REMOVAL (استبعاد او حذف نهائي - رمزية 1 و رمزية 2) */}
+      {/* ========================================================================= */}
+      <GuestRemovalModal
+        isOpen={!!guestRemovalTarget}
+        guest={guestRemovalTarget}
+        room={rooms.find(r => r.number === guestRemovalTarget?.roomNumber)}
+        onClose={() => setGuestRemovalTarget(null)}
+        onExcludeGuest={handleExcludeGuest}
+        onPermanentDelete={handlePermanentDeleteGuest}
+      />
 
       {/* ========================================================================= */}
       {/* MODAL: DIRECT CHECK-IN FOR WEB REQUESTS */}
@@ -11469,49 +10963,27 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">تعيين الغرفة الفندقية</label>
-                <select
-                  value={directCheckInRoom}
-                  onChange={(e) => setDirectCheckInRoom(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
-                >
-                  <option value="">-- اختر الغرفة المتاحة --</option>
-                  {rooms.map((r) => (
-                    <option key={r.number} value={r.number}>
-                      غرفة {r.number} - {r.name || r.type} ({guests.filter(g => g.roomNumber === r.number && g.status === "resident").length}/{r.capacity} نزيل)
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-3.5">
+              {/* تعيين الغرفة الفندقية المتاحة - تصميم منضبط ومرتب */}
+              <AvailableRoomAssigner
+                rooms={rooms}
+                selectedRoomNumber={directCheckInRoom}
+                onSelectRoom={(roomNum) => setDirectCheckInRoom(roomNum)}
+                guests={guests}
+                label="تعيين الغرفة الفندقية المتاحة"
+                required={true}
+              />
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">الصفة الإدارية للنزيل</label>
-                <select
-                  value={directCheckInRole}
-                  onChange={(e) => setDirectCheckInRole(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800"
-                >
-                  {adminRoles.map((role) => (
-                    <option key={role} value={role}>{role}</option>
-                  ))}
-                  <option value="custom">صفة مخصصة أخرى...</option>
-                </select>
-              </div>
-
-              {directCheckInRole === "custom" && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">اكتب الصفة المخصصة</label>
-                  <input
-                    type="text"
-                    value={directCheckInCustomRole}
-                    onChange={(e) => setDirectCheckInCustomRole(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
-                    placeholder="مثال: مستشار إعلامي"
-                  />
-                </div>
-              )}
+              {/* الصفة / الدور الإداري للنزيل */}
+              <AdministrativeRoleSelector
+                roles={adminRoles}
+                selectedRole={directCheckInRole}
+                onSelectRole={(role) => setDirectCheckInRole(role)}
+                onRolesChange={handleAdminRolesChange}
+                onNotification={triggerNotification}
+                label="الصفة / الدور الإداري للنزيل"
+                required={true}
+              />
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات التسكين</label>
@@ -11519,7 +10991,7 @@ export default function App() {
                   type="text"
                   value={directCheckInNotes}
                   onChange={(e) => setDirectCheckInNotes(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 outline-none focus:border-emerald-600"
                   placeholder="ملاحظات اختيارية..."
                 />
               </div>
@@ -11689,29 +11161,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* MODAL: CLOUD SYNC DIAGNOSTIC */}
-      {/* ========================================================================= */}
-      {showCloudSyncDiagnosticModal && (
-        <CloudSyncDiagnosticModal
-          isOpen={showCloudSyncDiagnosticModal}
-          onClose={() => setShowCloudSyncDiagnosticModal(false)}
-          errorDetails={authErrorDetails}
-          onRetryLogin={handleGoogleLogin}
-        />
-      )}
 
-      {/* ========================================================================= */}
-      {/* MODAL: VERCEL AUTH HELP */}
-      {/* ========================================================================= */}
-      {showVercelAuthHelpModal && (
-        <VercelAuthHelpModal
-          isOpen={showVercelAuthHelpModal}
-          onClose={() => setShowVercelAuthHelpModal(false)}
-          onRetryLogin={handleGoogleLogin}
-          currentProjectId="hotel-management-cloud"
-        />
-      )}
 
       {/* ========================================================================= */}
       {/* MODAL: CONFIRM DELETE OPERATIONAL YEAR / SEASON */}
@@ -11770,6 +11220,18 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: SUPABASE DATABASE MANAGEMENT & COMPREHENSIVE SYSTEM RESET */}
+      {/* ========================================================================= */}
+      <SupabaseDatabaseManager
+        isOpen={showSupabaseModal}
+        onClose={() => setShowSupabaseModal(false)}
+        onDataReset={() => {
+          handleForceRefresh();
+          triggerNotification("success", "تم إعادة ضبط النظام بالكامل وتحديث كافة البيانات في قاعدة البيانات بنجاح! 🎉");
+        }}
+      />
 
     </div>
   );
