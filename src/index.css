@@ -29,8 +29,15 @@ body {
 
 /* Print styles for resident identification card and reports */
 @media print {
+  @page {
+    margin: 10mm;
+    size: auto;
+  }
   body {
     background-color: white !important;
+    color: black !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
   body * {
     visibility: hidden;
@@ -73,6 +80,12 @@ body {
     background: white !important;
     color: black !important;
     display: block !important;
+    padding: 0 !important;
+  }
+  .card-print-item {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    margin-bottom: 20px !important;
   }
   .no-print {
     display: none !important;

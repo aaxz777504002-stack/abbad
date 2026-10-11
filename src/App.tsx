@@ -1736,10 +1736,11 @@ export default function App() {
 
   // Reports tab states
   const [activeReportSubTab, setActiveReportSubTab] = useState<
-    "all_guests" | "residents" | "checked_out" | "by_room" | "by_nationality" | "barcode_logs" | "bulk_print"
+    "all_guests" | "residents" | "checked_out" | "by_room" | "rooms_inventory" | "by_nationality" | "barcode_logs" | "bulk_print"
   >("all_guests");
   const [reportNationalityFilter, setReportNationalityFilter] = useState<string>("all");
   const [reportSearchQuery, setReportSearchQuery] = useState<string>("");
+  const [bulkCardScope, setBulkCardScope] = useState<"residents" | "all">("residents");
   const [checkoutSearchQuery, setCheckoutSearchQuery] = useState<string>("");
 
   // Form state for creating custom/quick Resident ID Cards
@@ -3976,15 +3977,15 @@ export default function App() {
     }
   };
 
-  // BULK EXPORT ALL RESIDENT CARDS TO A SINGLE MULTI-PAGE PDF
+  // BULK EXPORT ALL GUESTS / RESIDENT CARDS TO A SINGLE MULTI-PAGE PDF
   const handleBulkExportPDF = async () => {
-    const residents = guests.filter(g => g.status === "resident");
-    if (residents.length === 0) {
-      triggerNotification("error", "لا يوجد نزلاء مقيمين حالياً لتصدير كروت لهم!");
+    const targetGuests = bulkCardScope === "all" ? guests : guests.filter(g => g.status === "resident");
+    if (targetGuests.length === 0) {
+      triggerNotification("error", bulkCardScope === "all" ? "لا يوجد نزلاء مسجلين بالنظام لتصدير بطاقاتهم!" : "لا يوجد نزلاء مقيمين حالياً لتصدير كروت لهم!");
       return;
     }
     setIsExportingCard(true);
-    triggerNotification("success", "جاري توليد ملف PDF جماعي لكروت النزلاء... يرجى الانتظار.");
+    triggerNotification("success", `جاري توليد ملف PDF جماعي لبطاقات النزلاء (${targetGuests.length} بطاقة)... يرجى الانتظار.`);
     
     try {
       const isHorizontal = cardLayout === "horizontal";
@@ -3997,8 +3998,8 @@ export default function App() {
         format: cardSize
       });
       
-      for (let i = 0; i < residents.length; i++) {
-        const guest = residents[i];
+      for (let i = 0; i < targetGuests.length; i++) {
+        const guest = targetGuests[i];
         const element = document.getElementById(`bulk-card-${guest.id}`);
         if (element) {
           // Wait briefly to ensure any rendering transitions are complete
@@ -4019,7 +4020,7 @@ export default function App() {
         }
       }
       
-      const bulkFileName = `Bulk_Resident_Cards_${new Date().toISOString().slice(0,10)}.pdf`;
+      const bulkFileName = `Bulk_Guest_Cards_${bulkCardScope}_${new Date().toISOString().slice(0,10)}.pdf`;
       try {
         const blob = pdf.output("blob");
         const blobUrl = URL.createObjectURL(blob);
@@ -4031,15 +4032,81 @@ export default function App() {
         link.click();
         document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
-        triggerNotification("success", "تم تصدير وتحميل ملف PDF جماعي لكروت النزلاء المقيمين بنجاح!");
+        triggerNotification("success", "تم تصدير وتحميل ملف PDF جماعي لبطاقات النزلاء بنجاح!");
       } catch (blobErr) {
         console.warn("Blob URL bulk download failed, falling back to standard pdf.save:", blobErr);
         pdf.save(bulkFileName);
-        triggerNotification("success", "تم تصدير وتحميل ملف PDF جماعي لكروت النزلاء المقيمين بنجاح!");
+        triggerNotification("success", "تم تصدير وتحميل ملف PDF جماعي لبطاقات النزلاء بنجاح!");
       }
     } catch (err) {
       console.error("Bulk export error:", err);
       triggerNotification("error", "فشل تصدير الكروت الجماعية. يرجى المحاولة لاحقاً.");
+    } finally {
+      setIsExportingCard(false);
+    }
+  };
+
+  // EXPORT CURRENT REPORT VIEW AS A PROFESSIONAL MULTI-PAGE PDF
+  const handleExportReportPDF = async () => {
+    const reportElem = document.getElementById("printable-report-container");
+    if (!reportElem) {
+      triggerNotification("error", "تعذر العثور على محتوى التقرير للتصدير.");
+      return;
+    }
+    setIsExportingCard(true);
+    triggerNotification("success", "جاري تجهيز وتصدير التقرير الفندقي بصيغة PDF... يرجى الانتظار.");
+
+    try {
+      // Small pause to allow styles and fonts to render
+      await new Promise(r => setTimeout(r, 200));
+
+      const canvas = await html2canvas(reportElem, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: "#ffffff",
+        logging: false
+      });
+
+      const imgWidth = 595.28; // Standard A4 width in pt (210mm)
+      const pageHeight = 841.89; // Standard A4 height in pt (297mm)
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      const pdf = new jsPDF("p", "pt", "a4");
+      const imgData = canvas.toDataURL("image/png");
+
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const reportName = `Hotel_Report_${activeReportSubTab}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      try {
+        const blob = pdf.output("blob");
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = reportName;
+        link.target = "_blank";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+        triggerNotification("success", "تم تصدير التقرير وتحميل ملف PDF بنجاح!");
+      } catch {
+        pdf.save(reportName);
+        triggerNotification("success", "تم تصدير التقرير وتحميل ملف PDF بنجاح!");
+      }
+    } catch (err) {
+      console.error("Report PDF export error:", err);
+      triggerNotification("error", "حدث خطأ أثناء تصدير التقرير كملف PDF. يرجى تجربة الطباعة الورقية.");
     } finally {
       setIsExportingCard(false);
     }
@@ -7330,7 +7397,14 @@ export default function App() {
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "by_room" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
                 >
                   <Bed className="w-3.5 h-3.5" />
-                  تفصيل الغرف والجنسيات
+                  تفصيل الغرف والنزلاء
+                </button>
+                <button
+                  onClick={() => { setActiveReportSubTab("rooms_inventory"); setReportSearchQuery(""); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "rooms_inventory" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
+                >
+                  <DoorClosed className="w-3.5 h-3.5" />
+                  تقرير الغرف الشامل
                 </button>
                 <button
                   onClick={() => { setActiveReportSubTab("by_nationality"); setReportNationalityFilter("all"); setReportSearchQuery(""); }}
@@ -7385,13 +7459,24 @@ export default function App() {
                     </div>
                   )}
 
-                  <button
-                    onClick={() => window.print()}
-                    className="w-full sm:w-auto px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow transition cursor-pointer"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    طباعة هذا التقرير ورقيًا
-                  </button>
+                  <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                    <button
+                      onClick={handleExportReportPDF}
+                      disabled={isExportingCard}
+                      className="flex-1 sm:flex-none px-4 py-2.5 bg-emerald-800 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow transition cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>{isExportingCard ? "جارٍ التصدير..." : "تصدير التقرير PDF"}</span>
+                    </button>
+
+                    <button
+                      onClick={() => window.print()}
+                      className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow transition cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>طباعة ورقية</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -7415,7 +7500,8 @@ export default function App() {
                         {activeReportSubTab === "all_guests" && "تقرير النزلاء الكلي والأرشيف"}
                         {activeReportSubTab === "residents" && "تقرير النزلاء الحاليين والمقيمين"}
                         {activeReportSubTab === "checked_out" && "تقرير النزلاء الخارجين والمغادرين"}
-                        {activeReportSubTab === "by_room" && "تقرير تفصيلي حسب الغرف ونوع الغرف والجنسية"}
+                        {activeReportSubTab === "by_room" && "تقرير تفصيلي حسب الغرف ونوع الغرف والنزلاء"}
+                        {activeReportSubTab === "rooms_inventory" && "تقرير الغرف الفندقية الشامل وحالة الإشغال"}
                         {activeReportSubTab === "by_nationality" && `تقرير جميع النزلاء مصفى للجنسية: ${reportNationalityFilter}`}
                         {activeReportSubTab === "barcode_logs" && "تقرير الدخول والخروج السريع بالباركود"}
                       </b></p>
@@ -7705,6 +7791,104 @@ export default function App() {
                     );
                   })()}
 
+                  {/* SUB-TAB: ALL ROOMS INVENTORY & OCCUPANCY REPORT */}
+                  {activeReportSubTab === "rooms_inventory" && (() => {
+                    const filteredRooms = rooms.filter(r => {
+                      const matchQuery = !reportSearchQuery ||
+                        r.number.includes(reportSearchQuery) ||
+                        r.name.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
+                        r.type.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
+                        (r.features && r.features.some(f => f.toLowerCase().includes(reportSearchQuery.toLowerCase())));
+                      return matchQuery;
+                    });
+
+                    const totalRooms = rooms.length;
+                    const occupiedCount = rooms.filter(r => r.status === "occupied" || r.status === "full").length;
+                    const availableCount = rooms.filter(r => r.status === "available").length;
+
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 no-print">
+                          <div>
+                            <h3 className="text-sm font-black text-slate-800">تقرير الغرف الفندقية الشامل وحالة الإشغال والتوزيع</h3>
+                            <p className="text-[11px] text-slate-500">جرد تفصيلي لكافة الغرف والأجنحة الفندقية ومواصفاتها ونزلاؤها المقيمين</p>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs font-bold">
+                            <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              متاحة: {availableCount}
+                            </span>
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+                              مشغولة: {occupiedCount}
+                            </span>
+                            <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
+                              الإجمالي: {totalRooms} غرفة
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-right border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
+                                <th className="p-3 text-center">رقم الغرفة</th>
+                                <th className="p-3">اسم الجناح / الغرفة</th>
+                                <th className="p-3">نوع الغرفة</th>
+                                <th className="p-3 text-center">الطابق</th>
+                                <th className="p-3 text-center">الاتجاه / الإطلالة</th>
+                                <th className="p-3 text-center">السعة</th>
+                                <th className="p-3 text-center">حالة الغرفة</th>
+                                <th className="p-3">النزيل المقيم حالياً</th>
+                                <th className="p-3">الجنسية</th>
+                                <th className="p-3 text-center">تاريخ الدخول</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {filteredRooms.length === 0 ? (
+                                <tr>
+                                  <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">لم يتم العثور على أي غرف مطابقة للبحث</td>
+                                </tr>
+                              ) : (
+                                filteredRooms.map(r => {
+                                  const resident = guests.find(g => g.roomNumber === r.number && g.status === "resident");
+                                  return (
+                                    <tr key={r.number} className="hover:bg-slate-50/50 transition">
+                                      <td className="p-3 text-center font-black text-emerald-950 bg-emerald-50/20">{r.number}</td>
+                                      <td className="p-3 font-extrabold text-slate-800">{r.name}</td>
+                                      <td className="p-3 font-semibold text-slate-600">{r.type}</td>
+                                      <td className="p-3 text-center font-medium text-slate-600">الطابق {r.floor === 0 ? "الأرضي" : r.floor}</td>
+                                      <td className="p-3 text-center font-medium text-slate-600">{r.direction || "-"}</td>
+                                      <td className="p-3 text-center text-slate-600 font-bold">{r.capacity} أشخاص</td>
+                                      <td className="p-3 text-center">
+                                        <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-black border ${
+                                          r.status === "available" ? "bg-emerald-50 text-emerald-800 border-emerald-100" :
+                                          r.status === "occupied" ? "bg-amber-50 text-amber-800 border-amber-100" :
+                                          "bg-rose-50 text-rose-800 border-rose-100"
+                                        }`}>
+                                          {r.status === "available" && "شاغرة ومتاحة"}
+                                          {r.status === "occupied" && "مشغولة مقيمة"}
+                                          {r.status === "full" && "ممتلئة بالكامل"}
+                                        </span>
+                                      </td>
+                                      <td className={`p-3 font-black ${resident ? "text-emerald-900" : "text-slate-400 italic"}`}>
+                                        {resident ? resident.name : "لا يوجد (شاغرة)"}
+                                      </td>
+                                      <td className="p-3 font-semibold text-slate-600">
+                                        {resident ? resident.country : "-"}
+                                      </td>
+                                      <td className="p-3 text-center text-slate-500 font-mono text-[11px]">
+                                        {resident ? new Date(resident.checkInDate).toLocaleDateString("ar-EG") : "-"}
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* SUB-TAB 5: FILTER BY NATIONALITY */}
                   {activeReportSubTab === "by_nationality" && (() => {
                     const filtered = filteredGuests.filter(g => {
@@ -7870,59 +8054,87 @@ export default function App() {
                 <div className="space-y-6">
                   
                   {/* Action Bar for Bulk Cards */}
-                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-4 justify-between items-center no-print">
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center no-print">
                     <div>
-                      <h3 className="text-sm font-black text-slate-800">طباعة الكروت الفردية لكافة النزلاء المقيمين حالياً دفعة واحدة</h3>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        سيقوم النظام بتجميع وتخطيط بطاقات الهوية لكافة النزلاء الحاليين (البالغ عددهم {guests.filter(g => g.status === "resident").length} نزيل) وتجهيزهم للطباعة الورقية الفورية أو تصديرهم لملف PDF موحد.
+                      <h3 className="text-sm font-black text-slate-800">طباعة وتصدير بطاقات النزلاء بالكامل دفعة واحدة</h3>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        تجهيز وتخطيط بطاقات الهوية لكافة النزلاء وتصديرها كملف PDF موحد عالي الدقة أو طباعتها ورقيًا فورياً.
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2.5 w-full sm:w-auto shrink-0 justify-end">
-                      <button
-                        onClick={handleBulkExportPDF}
-                        disabled={isExportingCard || guests.filter(g => g.status === "resident").length === 0}
-                        className="px-5 py-2.5 bg-amber-700 hover:bg-amber-600 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-amber-950/20 transition cursor-pointer"
-                      >
-                        <FileText className="w-4 h-4" />
-                        تنزيل PDF جماعي للجميع
-                      </button>
+                    <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto shrink-0 justify-between lg:justify-end">
+                      {/* Scope Toggle: Residents vs All Guests */}
+                      <div className="bg-slate-100 p-1 rounded-xl flex items-center gap-1 border border-slate-200 text-xs font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setBulkCardScope("residents")}
+                          className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${bulkCardScope === "residents" ? "bg-white text-emerald-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          النزلاء المقيمين حالياً ({guests.filter(g => g.status === "resident").length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBulkCardScope("all")}
+                          className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${bulkCardScope === "all" ? "bg-white text-emerald-900 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
+                        >
+                          نزلاء النظام بالكامل ({guests.length})
+                        </button>
+                      </div>
 
-                      <button
-                        onClick={() => window.print()}
-                        disabled={guests.filter(g => g.status === "resident").length === 0}
-                        className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
-                      >
-                        <Printer className="w-4 h-4" />
-                        طباعة جماعية بالورق
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleBulkExportPDF}
+                          disabled={isExportingCard || (bulkCardScope === "all" ? guests.length === 0 : guests.filter(g => g.status === "resident").length === 0)}
+                          className="px-4 py-2.5 bg-amber-700 hover:bg-amber-600 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-amber-950/20 transition cursor-pointer"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>{isExportingCard ? "جارٍ التصدير..." : "تنزيل PDF جماعي للبطائق"}</span>
+                        </button>
+
+                        <button
+                          onClick={() => window.print()}
+                          disabled={(bulkCardScope === "all" ? guests.length === 0 : guests.filter(g => g.status === "resident").length === 0)}
+                          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
+                        >
+                          <Printer className="w-4 h-4" />
+                          <span>طباعة ورقية للبطائق</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
 
                   {/* BULK PRINTABLE CARDS WRAPPER */}
                   <div id="printable-bulk-cards" className="bg-slate-50 rounded-2xl border border-slate-200 p-6 no-print-layout-container">
                     
-                    {guests.filter(g => g.status === "resident").length === 0 ? (
-                      <div className="bg-white p-12 text-center rounded-2xl border border-slate-100 shadow-inner no-print">
-                        <UserCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                        <h4 className="text-base font-bold text-slate-700">لا يوجد نزلاء مقيمين حالياً لتوليد كروت لهم!</h4>
-                        <p className="text-xs text-slate-400 mt-1">يجب أولاً القيام بتسكين نزلاء جدد لكي تظهر الكروت وتتمكن من طباعتها دفعة واحدة.</p>
-                      </div>
-                    ) : (
-                      <div className={`grid ${cardLayout === "horizontal" ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"} gap-6`}>
-                        {guests.filter(g => g.status === "resident").map((guest) => {
-                          const room = rooms.find(r => r.number === guest.roomNumber);
-                          const roomName = room ? room.name : "جناح غير محدد";
-                          const roomDirection = room?.direction || "غير محدد";
-                          const floorText = room ? `الطابق ${room.floor === 0 ? "الأرضي" : room.floor}` : "الطابق الأرضي";
-                          const qrData = encodeURIComponent(`الاسم: ${guest.name} | الدولة: ${guest.country} | الغرفة: ${guest.roomNumber} (${roomName}) | الطابق: ${floorText} | الاتجاه: ${roomDirection} | الصفة: ${guest.administrativeRole || "عضو وفد"} | الجوال: ${guest.mobile} | الدخول: ${new Date(guest.checkInDate).toLocaleDateString("ar-EG")}`);
-                          const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrData}`;
+                    {(() => {
+                      const targetBulkGuests = bulkCardScope === "all" ? guests : guests.filter(g => g.status === "resident");
+                      if (targetBulkGuests.length === 0) {
+                        return (
+                          <div className="bg-white p-12 text-center rounded-2xl border border-slate-100 shadow-inner no-print">
+                            <UserCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                            <h4 className="text-base font-bold text-slate-700">
+                              {bulkCardScope === "all" ? "لا يوجد نزلاء مسجلين بالنظام حالياً لتوليد كروت لهم!" : "لا يوجد نزلاء مقيمين حالياً لتوليد كروت لهم!"}
+                            </h4>
+                            <p className="text-xs text-slate-400 mt-1">يجب أولاً القيام بتسكين نزلاء جدد لكي تظهر الكروت وتتمكن من طباعتها دفعة واحدة.</p>
+                          </div>
+                        );
+                      }
 
-                          return (
-                            <div 
-                              key={guest.id} 
-                              id={`bulk-card-${guest.id}`}
-                              className={`rounded-2xl shadow-md relative overflow-hidden break-inside-avoid print:shadow-none print:border-slate-300 print:mb-6 flex flex-col justify-between ${cardColorTheme === "layali_al_uns" ? "p-0 border-0" : "p-5 border border-slate-150"} ${cardLayout === "horizontal" ? "text-right" : "text-center"}`}
+                      return (
+                        <div className={`grid ${cardLayout === "horizontal" ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"} gap-6`}>
+                          {targetBulkGuests.map((guest) => {
+                            const room = rooms.find(r => r.number === guest.roomNumber);
+                            const roomName = room ? room.name : "جناح غير محدد";
+                            const roomDirection = room?.direction || "غير محدد";
+                            const floorText = room ? `الطابق ${room.floor === 0 ? "الأرضي" : room.floor}` : "الطابق الأرضي";
+                            const qrData = encodeURIComponent(`الاسم: ${guest.name} | الدولة: ${guest.country} | الغرفة: ${guest.roomNumber} (${roomName}) | الطابق: ${floorText} | الاتجاه: ${roomDirection} | الصفة: ${guest.administrativeRole || "عضو وفد"} | الجوال: ${guest.mobile} | الدخول: ${new Date(guest.checkInDate).toLocaleDateString("ar-EG")}`);
+                            const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrData}`;
+
+                            return (
+                              <div 
+                                key={guest.id} 
+                                id={`bulk-card-${guest.id}`}
+                                className={`card-print-item rounded-2xl shadow-md relative overflow-hidden break-inside-avoid print:shadow-none print:border-slate-300 print:mb-6 flex flex-col justify-between ${cardColorTheme === "layali_al_uns" ? "p-0 border-0" : "p-5 border border-slate-150"} ${cardLayout === "horizontal" ? "text-right" : "text-center"}`}
                               style={cardColorTheme === "layali_al_uns"
                                 ? { width: "100%", maxWidth: "580px", margin: "0 auto", minHeight: "340px" }
                                 : (cardLayout === "vertical" 
@@ -8105,7 +8317,8 @@ export default function App() {
                           );
                         })}
                       </div>
-                    )}
+                    );
+                  })()}
 
                   </div>
 
