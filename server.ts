@@ -89,7 +89,7 @@ function fixNginxAndIframeEnvironment() {
 
     if (nginxModified) {
       try {
-        execSync("nginx -s reload", { stdio: "ignore" });
+        execSync("nginx -s reload", { stdio: "ignore", timeout: 1500 });
         console.log("Persistent AI Studio environment fix applied and nginx reloaded.");
       } catch {}
     }

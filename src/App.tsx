@@ -4509,36 +4509,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Cloud Database Sync Status Widget */}
-          <div className="mx-4 my-4 p-3.5 rounded-xl bg-emerald-900/40 border border-emerald-800/80 text-xs">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-slate-400">حالة المزامنة السحابية:</span>
-              <span className="px-2 py-0.5 rounded-full font-semibold text-[10px] bg-emerald-900 text-emerald-300 border border-emerald-700">
-                اتصال دائم نشط 🟢
-              </span>
-            </div>
-            
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-emerald-300 font-bold text-[11px]">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>قاعدة البيانات السحابية مؤمنة 🟢</span>
-              </div>
-              <p className="text-[10px] text-emerald-200/80 leading-relaxed">
-                يتم حفظ وتحديث بيانات الغرف والنزلاء والطلبات تلقائياً بالخادم السحابي.
-              </p>
-              <div className="pt-1">
-                <button 
-                  onClick={handleForceRefresh}
-                  disabled={isLoadingData}
-                  className="w-full py-2 bg-emerald-800/80 hover:bg-emerald-700 disabled:opacity-60 rounded-lg text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shadow transition cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingData ? "animate-spin" : ""}`} />
-                  <span>{isLoadingData ? "جارٍ التحديث..." : "تحديث ومزامنة البيانات"}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
           {/* Navigation Links */}
           <nav className="px-4 space-y-1">
             <button 
