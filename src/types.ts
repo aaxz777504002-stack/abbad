@@ -1,13 +1,17 @@
 export type VisitType = "general_1" | "general_2" | "private";
 
 export interface Room {
+  id?: string;
   number: string;     // Unique room identifier (e.g., "101")
   name: string;       // Room descriptive name (e.g., "جناح اليمامة")
   floor: number;      // Floor number
   type: string;       // Room type (جناح ملكي, غرفة مزدوجة, غرفة مفردة, جناح عائلي)
   capacity: number;   // Maximum capacity of people
-  status: "available" | "occupied" | "full"; // Room state
+  status: "available" | "occupied" | "full" | "maintenance" | "cleaning"; // Room state
   direction: string;  // Room orientation/view (إطلالة بحرية, إطلالة على المسبح, إطلالة داخلية, إطلالة على المدينة)
+  pricePerNight?: number;
+  features?: string[];
+  notes?: string;
   visitType?: VisitType;
 }
 

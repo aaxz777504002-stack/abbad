@@ -4,7 +4,7 @@ export const DEFAULT_HOTEL_DATA = {
     hotelName: "فندق قصر الضيافة الملكي - خدر ليالي الأنس",
     hotelSubtitle: "نظام الإدارة الفندقية، الغرف، والوفود الرسمية",
     registrationLinkStatus: "open",
-    activeDatabase: "cloudsql_and_supabase",
+    activeDatabase: "supabase",
     contactPhone: "+966 11 456 7890",
     receptionMobile: "+966 50 123 4567",
     receptionEmail: "reception@layali-aluns.com",

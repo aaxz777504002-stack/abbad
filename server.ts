@@ -3,23 +3,7 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
-import { createClient } from "@supabase/supabase-js";
-import {
-  getAllRooms,
-  upsertRooms,
-  getAllGuests,
-  upsertGuest,
-  deleteGuest,
-  getAllServiceRequests,
-  upsertServiceRequest,
-  getAllPendingRequests,
-  upsertPendingRequest,
-  getAllGateLogs,
-  upsertGateLog,
-  getSetting,
-  setSetting,
-  resetAllHotelDataToDefault,
-} from "./src/db/hotel.ts";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_HOTEL_DATA } from "./src/lib/defaultData.ts";
 import { SUPABASE_SQL_SETUP_SCRIPT } from "./src/lib/supabase.ts";
 
@@ -47,7 +31,6 @@ function fixNginxAndIframeEnvironment() {
       }
     }
 
-    // 2. Fix /etc/nginx/user_auth_verification.lua so iframe isn't blocked by 3rd-party cookie check
     const luaPath = "/etc/nginx/user_auth_verification.lua";
     if (fs.existsSync(luaPath)) {
       let lua = fs.readFileSync(luaPath, "utf8");
@@ -58,7 +41,6 @@ function fixNginxAndIframeEnvironment() {
       }
     }
 
-    // 3. Fix /var/www/assets/_aistudio-iframe.js so aistudio.google origin is allowed and local requests are never delayed
     const iframeJsPath = "/var/www/assets/_aistudio-iframe.js";
     if (fs.existsSync(iframeJsPath)) {
       let js = fs.readFileSync(iframeJsPath, "utf8");
@@ -107,11 +89,14 @@ interface GuestRequest {
   email?: string;
   whatsapp?: string;
   roomType?: string;
-  notes: string;
+  notes?: string;
   photoUrl?: string;
   checkInDate?: string;
-  status: "pending" | "approved" | "rejected";
-  date: string;
+  checkOutDate?: string;
+  companionsCount?: number;
+  status: "pending" | "approved" | "rejected" | string;
+  date?: string;
+  createdAt?: string;
   administrativeRole?: string;
   year?: string;
   visitType?: string;
@@ -137,7 +122,7 @@ function readHotelDataSafely(): Record<string, any> {
       if (fs.existsSync(fp)) {
         const raw = fs.readFileSync(fp, "utf8");
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") {
+        if (parsed && typeof parsed === "object" && (parsed.rooms?.length || parsed.guests?.length)) {
           return parsed;
         }
       }
@@ -146,10 +131,7 @@ function readHotelDataSafely(): Record<string, any> {
     }
   }
   return {
-    rooms: [],
-    guests: [],
-    serviceRequests: [],
-    gateLogs: [],
+    ...DEFAULT_HOTEL_DATA,
     updatedAt: new Date().toISOString()
   };
 }
@@ -179,7 +161,7 @@ function writeHotelDataSafely(updated: Record<string, any>): Record<string, any>
   return merged;
 }
 
-// Safe helper to read config from all possible locations with robust fallback
+// Safe helper to read config from all possible locations
 function readConfigFileSafely(): Record<string, any> {
   const candidateFiles = [
     CONFIG_FILE,
@@ -203,7 +185,10 @@ function readConfigFileSafely(): Record<string, any> {
   }
   return {
     hotelName: "خدر ليالي الانس",
-    registrationLinkStatus: "open"
+    registrationLinkStatus: "open",
+    activeDatabase: "supabase",
+    supabaseUrl: "",
+    supabaseAnonKey: ""
   };
 }
 
@@ -240,22 +225,42 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 if (!fs.existsSync(REQUESTS_FILE)) {
-  const initialRequests: GuestRequest[] = [];
+  const initialRequests: GuestRequest[] = DEFAULT_HOTEL_DATA.pendingRequests || [];
   fs.writeFileSync(REQUESTS_FILE, JSON.stringify(initialRequests, null, 2), "utf8");
+}
+
+if (!fs.existsSync(HOTEL_DATA_FILE)) {
+  writeHotelDataSafely(DEFAULT_HOTEL_DATA);
 }
 
 // Initialize config across locations if needed
 const initialLoadedConfig = readConfigFileSafely();
 writeConfigFileSafely(initialLoadedConfig);
 
+// Helper to get active server-side Supabase client
+function getServerSupabaseClient(): SupabaseClient | null {
+  const config = readConfigFileSafely();
+  const url = (config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
+  const key = (config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
+
+  if (!url || !key) return null;
+  try {
+    return createClient(url, key, {
+      auth: { persistSession: false }
+    });
+  } catch (e) {
+    console.warn("Failed to create server Supabase client:", e);
+    return null;
+  }
+}
+
 async function startServer() {
-  // Apply persistent environment fixes on server startup
   fixNginxAndIframeEnvironment();
 
   const app = express();
   const PORT = 3000;
 
-  // CORS and Headers middleware for robust API communication and cookie unblocking in all environments
+  // CORS and Headers middleware
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
@@ -273,16 +278,16 @@ async function startServer() {
     next();
   });
 
-  // Support large payload for base64 photo uploads from mobile devices
+  // Support large payload for base64 photo uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // Health check
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", database: "supabase", timestamp: new Date().toISOString() });
   });
 
-  // API Route: Unblock cookies and identification tokens for iframe/preview environments
+  // API Route: Unblock cookies
   app.get("/api/unblock-cookies", (req, res) => {
     res.setHeader("Set-Cookie", "hotel_session=unblocked; Path=/; SameSite=None; Secure; Partitioned; Max-Age=2592000");
     res.json({
@@ -294,109 +299,110 @@ async function startServer() {
     });
   });
 
-  // API Route: Get complete hotel data (rooms, guests, serviceRequests, gateLogs)
+  // API Route: Get complete hotel data
   app.get(["/api/hotel-data", "/data/hotel_data.json"], async (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     try {
-      let roomsData: any[] = [];
-      let guestsData: any[] = [];
-      let servicesData: any[] = [];
-      let gatesData: any[] = [];
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const [roomsRes, guestsRes, servicesRes, gatesRes] = await Promise.all([
+            sb.from("rooms").select("*").order("number", { ascending: true }),
+            sb.from("guests").select("*").order("created_at", { ascending: false }),
+            sb.from("service_requests").select("*").order("created_at", { ascending: false }),
+            sb.from("gate_logs").select("*").order("timestamp", { ascending: false })
+          ]);
 
-      try {
-        roomsData = await getAllRooms();
-        guestsData = await getAllGuests();
-        servicesData = await getAllServiceRequests();
-        gatesData = await getAllGateLogs();
-      } catch (dbErr) {
-        console.warn("SQL query fallback to file:", dbErr);
-      }
+          if (roomsRes.data && roomsRes.data.length > 0) {
+            const clientRooms = roomsRes.data.map((r: any) => ({
+              id: r.id,
+              number: r.number,
+              floor: r.floor,
+              type: r.type,
+              name: r.name || "",
+              capacity: r.capacity,
+              status: r.status,
+              direction: r.direction || "",
+              pricePerNight: r.price_per_night || 0,
+              features: Array.isArray(r.features) ? r.features : [],
+              notes: r.notes || "",
+            }));
 
-      // If database is available and has data, map fields to expected client shape
-      if (roomsData.length > 0) {
-        const clientRooms = roomsData.map((r) => ({
-          id: r.id,
-          number: r.number,
-          floor: r.floor,
-          type: r.type,
-          name: r.name,
-          capacity: r.capacity,
-          status: r.status,
-          direction: r.direction,
-          pricePerNight: r.pricePerNight,
-          features: r.features || [],
-          notes: r.notes || "",
-        }));
+            const clientGuests = (guestsRes.data || []).map((g: any) => ({
+              id: g.id,
+              name: g.name,
+              country: g.country || "المملكة العربية السعودية",
+              mobile: g.mobile,
+              email: g.email || "",
+              whatsapp: g.whatsapp || "",
+              roomNumber: g.room_number || "",
+              status: g.status,
+              checkInDate: g.check_in_date,
+              checkOutDate: g.check_out_date || "",
+              notes: g.notes || "",
+              year: g.year || "2026",
+              visitType: g.visit_type || "general_1",
+              photoUrl: g.photo_url || "",
+              photoRawUrl: g.photo_raw_url || "",
+              photoQuality: g.photo_quality || "",
+              photoSizeKb: g.photo_size_kb || 0,
+              photoDimensions: g.photo_dimensions || "",
+              administrativeRole: g.administrative_role || "عضو وفد",
+              qrCode: g.qr_code || "",
+              nationalId: g.national_id || "",
+            }));
 
-        const clientGuests = guestsData.map((g) => ({
-          id: g.id,
-          name: g.name,
-          country: g.country,
-          mobile: g.mobile,
-          email: g.email || "",
-          whatsapp: g.whatsapp || "",
-          roomNumber: g.roomNumber || "",
-          status: g.status,
-          checkInDate: g.checkInDate,
-          checkOutDate: g.checkOutDate || "",
-          notes: g.notes || "",
-          year: g.year,
-          visitType: g.visitType,
-          photoUrl: g.photoUrl || "",
-          photoRawUrl: g.photoRawUrl || "",
-          photoQuality: g.photoQuality || "",
-          photoSizeKb: g.photoSizeKb || 0,
-          photoDimensions: g.photoDimensions || "",
-          administrativeRole: g.administrativeRole || "عضو وفد",
-          qrCode: g.qrCode || "",
-          nationalId: g.nationalId || "",
-        }));
+            const clientServices = (servicesRes.data || []).map((s: any) => ({
+              id: s.id,
+              roomNumber: s.room_number,
+              guestName: s.guest_name || "",
+              guestMobile: s.guest_mobile || "",
+              serviceType: s.service_type,
+              details: s.details || "",
+              status: s.status || "pending",
+              createdAt: s.created_at,
+              completedAt: s.completed_at || null,
+              year: s.year || "2026",
+              visitType: s.visit_type || "general_1",
+            }));
 
-        const clientServices = servicesData.map((s) => ({
-          id: s.id,
-          roomNumber: s.roomNumber,
-          guestName: s.guestName,
-          guestMobile: s.guestMobile,
-          serviceType: s.serviceType,
-          details: s.details,
-          status: s.status,
-          createdAt: s.createdAt,
-          completedAt: s.completedAt,
-          year: s.year,
-          visitType: s.visitType,
-        }));
+            const clientGates = (gatesRes.data || []).map((gl: any) => ({
+              id: gl.id,
+              guestId: gl.guest_id || "",
+              guestName: gl.guest_name,
+              roomNumber: gl.room_number || "",
+              entryType: gl.entry_type || "دخول",
+              action: gl.entry_type === "خروج" ? "exit" : "entry",
+              gateName: gl.gate_name || "البوابة الرئيسية",
+              timestamp: gl.timestamp,
+              officerName: gl.officer_name || "",
+              notes: gl.notes || "",
+            }));
 
-        const clientGates = gatesData.map((gl) => ({
-          id: gl.id,
-          guestId: gl.guestId || "",
-          guestName: gl.guestName,
-          roomNumber: gl.roomNumber || "",
-          entryType: gl.entryType || "دخول",
-          action: gl.entryType === "خروج" ? "exit" : "entry",
-          gateName: gl.gateName || "البوابة الرئيسية",
-          timestamp: gl.timestamp,
-          officerName: gl.officerName || "",
-          notes: gl.notes || "",
-        }));
-
-        return res.json({
-          success: true,
-          rooms: clientRooms,
-          guests: clientGuests,
-          serviceRequests: clientServices,
-          gateLogs: clientGates,
-          updatedAt: new Date().toISOString()
-        });
+            return res.json({
+              success: true,
+              source: "supabase",
+              rooms: clientRooms,
+              guests: clientGuests,
+              serviceRequests: clientServices,
+              gateLogs: clientGates,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        } catch (sbErr) {
+          console.warn("Supabase query fallback to file:", sbErr);
+        }
       }
 
       // Fallback to local file
       const data = readHotelDataSafely();
       res.json({
         success: true,
-        rooms: data.rooms || [],
-        guests: data.guests || [],
-        serviceRequests: data.serviceRequests || [],
-        gateLogs: data.gateLogs || [],
+        source: "local_cache",
+        rooms: data.rooms || DEFAULT_HOTEL_DATA.rooms,
+        guests: data.guests || DEFAULT_HOTEL_DATA.guests,
+        serviceRequests: data.serviceRequests || DEFAULT_HOTEL_DATA.serviceRequests,
+        gateLogs: data.gateLogs || DEFAULT_HOTEL_DATA.gateLogs,
         updatedAt: data.updatedAt || new Date().toISOString()
       });
     } catch (error) {
@@ -417,28 +423,90 @@ async function startServer() {
 
       const saved = writeHotelDataSafely(updatePayload);
 
-      // Async write to Cloud SQL database
-      try {
-        if (Array.isArray(rooms) && rooms.length > 0) {
-          await upsertRooms(rooms);
-        }
-        if (Array.isArray(guests) && guests.length > 0) {
-          for (const g of guests) {
-            await upsertGuest(g);
+      // Async write to Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          if (Array.isArray(rooms) && rooms.length > 0) {
+            const roomPayload = rooms.map(r => ({
+              id: r.id || `room_${r.number}`,
+              number: String(r.number),
+              floor: Number(r.floor) || 1,
+              type: r.type || "غرفة مزدوجة",
+              name: r.name || "",
+              capacity: Number(r.capacity) || 2,
+              status: r.status || "available",
+              direction: r.direction || "",
+              price_per_night: Number(r.pricePerNight) || 0,
+              features: Array.isArray(r.features) ? r.features : [],
+              notes: r.notes || "",
+              updated_at: new Date().toISOString()
+            }));
+            await sb.from("rooms").upsert(roomPayload, { onConflict: "number" });
           }
-        }
-        if (Array.isArray(serviceRequests) && serviceRequests.length > 0) {
-          for (const s of serviceRequests) {
-            await upsertServiceRequest(s);
+
+          if (Array.isArray(guests) && guests.length > 0) {
+            const guestPayload = guests.map(g => ({
+              id: g.id,
+              name: g.name,
+              country: g.country || "المملكة العربية السعودية",
+              mobile: g.mobile,
+              email: g.email || null,
+              whatsapp: g.whatsapp || null,
+              room_number: g.roomNumber || null,
+              status: g.status || "resident",
+              check_in_date: g.checkInDate || new Date().toISOString(),
+              check_out_date: g.checkOutDate || null,
+              notes: g.notes || null,
+              year: g.year || "2026",
+              visit_type: g.visitType || "general_1",
+              photo_url: g.photoUrl || null,
+              photo_raw_url: g.photoRawUrl || null,
+              photo_quality: g.photoQuality || null,
+              photo_size_kb: g.photoSizeKb || null,
+              photo_dimensions: g.photoDimensions || null,
+              administrative_role: g.administrativeRole || "عضو وفد",
+              qr_code: g.qrCode || null,
+              national_id: g.nationalId || null,
+              updated_at: new Date().toISOString()
+            }));
+            await sb.from("guests").upsert(guestPayload, { onConflict: "id" });
           }
-        }
-        if (Array.isArray(gateLogs) && gateLogs.length > 0) {
-          for (const gl of gateLogs) {
-            await upsertGateLog(gl);
+
+          if (Array.isArray(serviceRequests) && serviceRequests.length > 0) {
+            const servicePayload = serviceRequests.map(s => ({
+              id: s.id,
+              room_number: s.roomNumber,
+              guest_name: s.guestName || "",
+              guest_mobile: s.guestMobile || "",
+              service_type: s.serviceType,
+              details: s.details || "",
+              status: s.status || "pending",
+              created_at: s.createdAt || new Date().toISOString(),
+              completed_at: s.completedAt || null,
+              year: s.year || "2026",
+              visit_type: s.visitType || "general_1"
+            }));
+            await sb.from("service_requests").upsert(servicePayload, { onConflict: "id" });
           }
+
+          if (Array.isArray(gateLogs) && gateLogs.length > 0) {
+            const gatePayload = gateLogs.map(gl => ({
+              id: gl.id,
+              guest_id: gl.guestId || null,
+              guest_name: gl.guestName,
+              room_number: gl.roomNumber || null,
+              entry_type: gl.entryType || "دخول",
+              gate_name: gl.gateName || "البوابة الرئيسية",
+              timestamp: gl.timestamp || new Date().toISOString(),
+              officer_name: gl.officerName || "",
+              notes: gl.notes || ""
+            }));
+            await sb.from("gate_logs").upsert(gatePayload, { onConflict: "id" });
+          }
+        } catch (sbErr) {
+          console.warn("Supabase async persist warning:", sbErr);
         }
-      } catch (dbErr) {
-        console.warn("Cloud SQL async persist warning:", dbErr);
       }
 
       res.json({
@@ -455,28 +523,65 @@ async function startServer() {
     }
   });
 
-  // API Route: Reset hotel data to initial rich seed state across Cloud SQL & local files
+  // API Route: Reset hotel data to initial seed state
   app.post("/api/hotel-data/reset", async (req, res) => {
     try {
       // 1. Reset local files
       const reset = writeHotelDataSafely(DEFAULT_HOTEL_DATA);
-      
-      // 2. Reset Cloud SQL PostgreSQL database
-      try {
-        await resetAllHotelDataToDefault(DEFAULT_HOTEL_DATA);
-      } catch (sqlErr) {
-        console.warn("Cloud SQL reset warning:", sqlErr);
-      }
 
-      // 3. Reset pending requests file
+      // 2. Reset pending requests file
       if (DEFAULT_HOTEL_DATA.pendingRequests) {
         fs.writeFileSync(REQUESTS_FILE, JSON.stringify(DEFAULT_HOTEL_DATA.pendingRequests, null, 2), "utf8");
       }
 
-      res.json({ 
-        success: true, 
-        message: "تم إعادة ضبط النظام بالكامل وتحديث كافة البيانات في قاعدة البيانات بنجاح!", 
-        data: reset 
+      // 3. Reset Supabase tables if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const roomPayload = DEFAULT_HOTEL_DATA.rooms.map(r => ({
+            id: r.id,
+            number: r.number,
+            floor: r.floor,
+            type: r.type,
+            name: r.name || "",
+            capacity: r.capacity,
+            status: r.status,
+            direction: r.direction || "",
+            price_per_night: r.pricePerNight || 0,
+            features: r.features || [],
+            notes: r.notes || "",
+          }));
+          await sb.from("rooms").upsert(roomPayload, { onConflict: "number" });
+
+          const guestPayload = DEFAULT_HOTEL_DATA.guests.map(g => ({
+            id: g.id,
+            name: g.name,
+            country: g.country || "المملكة العربية السعودية",
+            mobile: g.mobile,
+            email: g.email || null,
+            whatsapp: g.whatsapp || null,
+            room_number: g.roomNumber || null,
+            status: g.status || "resident",
+            check_in_date: g.checkInDate || new Date().toISOString(),
+            check_out_date: g.checkOutDate || null,
+            notes: g.notes || null,
+            year: g.year || "2026",
+            visit_type: g.visitType || "general_1",
+            photo_url: g.photoUrl || null,
+            administrative_role: g.administrativeRole || "عضو وفد",
+            qr_code: g.qrCode || null,
+            national_id: g.nationalId || null,
+          }));
+          await sb.from("guests").upsert(guestPayload, { onConflict: "id" });
+        } catch (sbResetErr) {
+          console.warn("Supabase reset warning:", sbResetErr);
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "تم إعادة ضبط النظام بالكامل وتحديث كافة البيانات في قاعدة البيانات بنجاح!",
+        data: reset
       });
     } catch (error) {
       console.error("Failed to reset hotel data:", error);
@@ -486,18 +591,17 @@ async function startServer() {
 
   // Supabase Integration Endpoints
   // GET Supabase Configuration
-  app.get("/api/supabase/config", async (req, res) => {
+  app.get("/api/supabase/config", (req, res) => {
     try {
-      const configSetting = (await getSetting("supabase_config")) as any;
-      const url = configSetting?.url || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-      const anonKey = configSetting?.anonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-      const activeDb = configSetting?.activeDb || "cloudsql";
+      const config = readConfigFileSafely();
+      const url = config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+      const anonKey = config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 
       res.json({
         success: true,
         url,
         isConfigured: Boolean(url && anonKey),
-        activeDb,
+        activeDb: "supabase",
         hasKey: Boolean(anonKey),
       });
     } catch (err) {
@@ -506,25 +610,23 @@ async function startServer() {
   });
 
   // POST Save Supabase Configuration
-  app.post("/api/supabase/config", async (req, res) => {
+  app.post("/api/supabase/config", (req, res) => {
     try {
-      const { url, anonKey, activeDb } = req.body;
+      const { url, anonKey } = req.body;
       const cleanUrl = String(url || "").trim();
       const cleanKey = String(anonKey || "").trim();
-      const mode = activeDb === "supabase" ? "supabase" : "cloudsql";
 
-      await setSetting("supabase_config", {
-        url: cleanUrl,
-        anonKey: cleanKey,
-        activeDb: mode,
-        updatedAt: new Date().toISOString(),
+      writeConfigFileSafely({
+        supabaseUrl: cleanUrl,
+        supabaseAnonKey: cleanKey,
+        activeDatabase: "supabase"
       });
 
       res.json({
         success: true,
-        message: "تم حفظ إعدادات Supabase وتحديد قاعدة البيانات بنجاح!",
+        message: "تم حفظ إعدادات Supabase وتفعيل قاعدة البيانات بنجاح!",
         isConfigured: Boolean(cleanUrl && cleanKey),
-        activeDb: mode,
+        activeDb: "supabase",
       });
     } catch (err) {
       res.status(500).json({ error: "Failed to save supabase config" });
@@ -553,7 +655,7 @@ async function startServer() {
           return res.json({
             success: true,
             status: "connected_needs_tables",
-            message: "تم الاتصال بنجاح بمشروع Supabase! الجداول لم يتم إنشاؤها بعد، يمكنك الضغط على 'نسخ سكربت SQL' وإنشاؤها في Supabase بضغطة زر.",
+            message: "تم الاتصال بنجاح بمشروع Supabase! الجداول لم يتم إنشاؤها بعد، يمكنك الضغط على 'نسخ سكربت SQL' وتشغيله في لوحة Supabase.",
           });
         }
         return res.status(400).json({
@@ -575,6 +677,72 @@ async function startServer() {
     }
   });
 
+  // GET Table Status Verification in Supabase
+  app.get("/api/supabase/tables-status", async (req, res) => {
+    try {
+      const sb = getServerSupabaseClient();
+      if (!sb) {
+        return res.json({
+          isConfigured: false,
+          allReady: false,
+          tables: {}
+        });
+      }
+
+      const tablesList = [
+        { name: "rooms", arabicName: "الغرف الفندقية" },
+        { name: "guests", arabicName: "النزلاء والوفود" },
+        { name: "service_requests", arabicName: "طلبات الخدمات" },
+        { name: "pending_requests", arabicName: "طلبات الحجز والتسجيل" },
+        { name: "gate_logs", arabicName: "سجلات البوابات وحركات الدخول" },
+        { name: "hotel_settings", arabicName: "إعدادات وتكوين النظام" }
+      ];
+
+      const tablesStatus: Record<string, any> = {};
+      let allReady = true;
+
+      for (const t of tablesList) {
+        try {
+          const { count, error } = await sb.from(t.name).select("*", { count: "exact", head: true });
+          if (error) {
+            allReady = false;
+            tablesStatus[t.name] = {
+              name: t.name,
+              arabicName: t.arabicName,
+              exists: false,
+              count: 0,
+              error: error.message
+            };
+          } else {
+            tablesStatus[t.name] = {
+              name: t.name,
+              arabicName: t.arabicName,
+              exists: true,
+              count: count || 0
+            };
+          }
+        } catch (e: any) {
+          allReady = false;
+          tablesStatus[t.name] = {
+            name: t.name,
+            arabicName: t.arabicName,
+            exists: false,
+            count: 0,
+            error: e?.message || "Error"
+          };
+        }
+      }
+
+      res.json({
+        isConfigured: true,
+        allReady,
+        tables: tablesStatus
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to verify tables status" });
+    }
+  });
+
   // POST Sync / Migrate All Data to Supabase
   app.post("/api/supabase/sync", async (req, res) => {
     try {
@@ -583,9 +751,9 @@ async function startServer() {
       let targetKey = String(anonKey || "").trim();
 
       if (!targetUrl || !targetKey) {
-        const configSetting = (await getSetting("supabase_config")) as any;
-        targetUrl = configSetting?.url || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-        targetKey = configSetting?.anonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+        const config = readConfigFileSafely();
+        targetUrl = config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+        targetKey = config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
       }
 
       if (!targetUrl || !targetKey) {
@@ -596,32 +764,25 @@ async function startServer() {
       }
 
       const client = createClient(targetUrl, targetKey);
+      const data = readHotelDataSafely();
 
-      // Get current data from SQL or local default
-      let currentRooms: any[] = await getAllRooms();
-      if (!currentRooms || currentRooms.length === 0) currentRooms = DEFAULT_HOTEL_DATA.rooms;
-
-      let currentGuests: any[] = await getAllGuests();
-      if (!currentGuests || currentGuests.length === 0) currentGuests = DEFAULT_HOTEL_DATA.guests;
-
-      let currentServices: any[] = await getAllServiceRequests();
-      if (!currentServices || currentServices.length === 0) currentServices = DEFAULT_HOTEL_DATA.serviceRequests;
-
-      let currentGates: any[] = await getAllGateLogs();
-      if (!currentGates || currentGates.length === 0) currentGates = DEFAULT_HOTEL_DATA.gateLogs;
+      let currentRooms: any[] = data.rooms || DEFAULT_HOTEL_DATA.rooms;
+      let currentGuests: any[] = data.guests || DEFAULT_HOTEL_DATA.guests;
+      let currentServices: any[] = data.serviceRequests || DEFAULT_HOTEL_DATA.serviceRequests;
+      let currentGates: any[] = data.gateLogs || DEFAULT_HOTEL_DATA.gateLogs;
 
       // Upsert rooms to Supabase
       const roomPayload = currentRooms.map((r) => ({
-        id: r.id,
-        number: r.number,
-        floor: r.floor,
-        type: r.type,
+        id: r.id || `room_${r.number}`,
+        number: String(r.number),
+        floor: Number(r.floor) || 1,
+        type: r.type || "غرفة مزدوجة",
         name: r.name || "",
-        capacity: r.capacity,
-        status: r.status,
+        capacity: Number(r.capacity) || 2,
+        status: r.status || "available",
         direction: r.direction || "",
-        price_per_night: r.pricePerNight || 0,
-        features: r.features || [],
+        price_per_night: Number(r.pricePerNight) || 0,
+        features: Array.isArray(r.features) ? r.features : [],
         notes: r.notes || "",
       }));
       await client.from("rooms").upsert(roomPayload, { onConflict: "number" });
@@ -677,6 +838,18 @@ async function startServer() {
       }));
       await client.from("gate_logs").upsert(gatePayload, { onConflict: "id" });
 
+      // Upsert hotel settings to Supabase
+      await client.from("hotel_settings").upsert([
+        {
+          key: "general_config",
+          value: {
+            hotelName: "فندق قصر الضيافة الملكي - خدر ليالي الأنس",
+            registrationLinkStatus: "open",
+            updatedAt: new Date().toISOString()
+          }
+        }
+      ], { onConflict: "key" });
+
       res.json({
         success: true,
         message: "تم ترحيل ومزامنة كافة البيانات إلى قاعدة بيانات Supabase بنجاح تام!",
@@ -702,36 +875,40 @@ async function startServer() {
     res.send(SUPABASE_SQL_SETUP_SCRIPT);
   });
 
-
   // API Route: Get pending requests
   app.get("/api/requests", async (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     try {
-      try {
-        const sqlRequests = await getAllPendingRequests();
-        if (sqlRequests.length > 0) {
-          const clientReqs = sqlRequests.map((r) => ({
-            id: r.id,
-            name: r.name,
-            country: r.country || "المملكة العربية السعودية",
-            mobile: r.mobile,
-            email: r.email || "",
-            whatsapp: r.whatsapp || "",
-            roomType: r.roomType || "",
-            status: r.status,
-            checkInDate: r.checkInDate || "",
-            checkOutDate: r.checkOutDate || "",
-            companionsCount: r.companionsCount || 0,
-            administrativeRole: r.administrativeRole || "عضو وفد",
-            notes: r.notes || "",
-            year: r.year || "2026",
-            visitType: r.visitType || "general_1",
-            date: r.createdAt,
-          }));
-          return res.json(clientReqs);
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const { data: sbRequests } = await sb.from("pending_requests").select("*").order("created_at", { ascending: false });
+          if (sbRequests && sbRequests.length > 0) {
+            const clientReqs = sbRequests.map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              country: r.country || "المملكة العربية السعودية",
+              mobile: r.mobile,
+              email: r.email || "",
+              whatsapp: r.whatsapp || "",
+              roomType: r.room_type || "",
+              status: r.status,
+              checkInDate: r.check_in_date || "",
+              checkOutDate: r.check_out_date || "",
+              companionsCount: r.companions_count || 0,
+              administrativeRole: r.administrative_role || "عضو وفد",
+              notes: r.notes || "",
+              year: r.year || "2026",
+              visitType: r.visit_type || "general_1",
+              assignedRoomNumber: r.assigned_room_number || "",
+              assignedGuestId: r.assigned_guest_id || "",
+              date: r.created_at,
+            }));
+            return res.json(clientReqs);
+          }
+        } catch (sbErr) {
+          console.warn("Supabase requests query fallback:", sbErr);
         }
-      } catch (dbErr) {
-        console.warn("SQL requests query fallback:", dbErr);
       }
 
       if (fs.existsSync(REQUESTS_FILE)) {
@@ -755,7 +932,6 @@ async function startServer() {
         return res.status(400).json({ error: "الاسم ورقم الجوال مطلوبان لإتمام التسجيل." });
       }
 
-      // Check if registration link is open
       const config = readConfigFileSafely();
       if (config.registrationLinkStatus === "closed") {
         return res.status(403).json({ error: "رابط التسجيل مغلق حالياً من قبل إدارة الفندق." });
@@ -779,14 +955,30 @@ async function startServer() {
         visitType: visitType || "general_1"
       };
 
-      // Save to Cloud SQL
-      try {
-        await upsertPendingRequest({
-          ...newRequest,
-          createdAt: newRequest.date,
-        });
-      } catch (dbErr) {
-        console.warn("Cloud SQL request persist warning:", dbErr);
+      // Save to Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("pending_requests").upsert({
+            id: newRequest.id,
+            name: newRequest.name,
+            country: newRequest.country,
+            mobile: newRequest.mobile,
+            email: newRequest.email || null,
+            whatsapp: newRequest.whatsapp || null,
+            room_type: newRequest.roomType || null,
+            status: "pending",
+            check_in_date: newRequest.checkInDate || null,
+            administrative_role: newRequest.administrativeRole,
+            notes: newRequest.notes || null,
+            photo_url: newRequest.photoUrl || null,
+            year: newRequest.year,
+            visit_type: newRequest.visitType,
+            created_at: newRequest.date
+          }, { onConflict: "id" });
+        } catch (sbErr) {
+          console.warn("Supabase pending request persist warning:", sbErr);
+        }
       }
 
       let requests: GuestRequest[] = [];
@@ -798,7 +990,7 @@ async function startServer() {
       } catch (e) {
         requests = [];
       }
-      
+
       requests.unshift(newRequest);
       fs.writeFileSync(REQUESTS_FILE, JSON.stringify(requests, null, 2), "utf8");
       res.json({ success: true, request: newRequest });
@@ -809,21 +1001,33 @@ async function startServer() {
   });
 
   // API Route: Action on request (approve / reject / delete / reset)
-  app.post("/api/requests/action", (req, res) => {
+  app.post("/api/requests/action", async (req, res) => {
     try {
-      const { id, action, assignedRoomNumber, assignedGuestId } = req.body; // action: "approve" | "reject" | "delete" | "reset"
+      const { id, action, assignedRoomNumber, assignedGuestId } = req.body;
       if (!id || !action) {
         return res.status(400).json({ error: "ID and Action are required" });
       }
 
-      let requests: GuestRequest[] = JSON.parse(fs.readFileSync(REQUESTS_FILE, "utf8"));
-      
+      let requests: GuestRequest[] = [];
+      if (fs.existsSync(REQUESTS_FILE)) {
+        try {
+          requests = JSON.parse(fs.readFileSync(REQUESTS_FILE, "utf8"));
+        } catch {}
+      }
+
+      const sb = getServerSupabaseClient();
+
       if (action === "delete") {
         requests = requests.filter(r => r.id !== id);
+        if (sb) {
+          try {
+            await sb.from("pending_requests").delete().eq("id", id);
+          } catch {}
+        }
       } else {
+        const updatedStatus = action === "approve" ? "approved" : action === "reset" ? "pending" : "rejected";
         requests = requests.map(r => {
           if (r.id === id) {
-            const updatedStatus = action === "approve" ? "approved" : action === "reset" ? "pending" : "rejected";
             return {
               ...r,
               status: updatedStatus,
@@ -833,6 +1037,16 @@ async function startServer() {
           }
           return r;
         });
+
+        if (sb) {
+          try {
+            await sb.from("pending_requests").update({
+              status: updatedStatus,
+              assigned_room_number: assignedRoomNumber || null,
+              assigned_guest_id: assignedGuestId || null
+            }).eq("id", id);
+          } catch {}
+        }
       }
 
       fs.writeFileSync(REQUESTS_FILE, JSON.stringify(requests, null, 2), "utf8");
@@ -842,7 +1056,7 @@ async function startServer() {
     }
   });
 
-  // API Route: Get configuration (supports /api/config, /config.json, /data/config.json, and /public/config.json)
+  // API Route: Get configuration
   app.get(["/api/config", "/config.json", "/data/config.json", "/public/config.json"], (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Content-Type", "application/json");
@@ -850,12 +1064,11 @@ async function startServer() {
       const config = readConfigFileSafely();
       res.json(config);
     } catch (error) {
-      console.error("Failed to read config:", error);
       res.json({ registrationLinkStatus: "open", hotelName: "خدر ليالي الانس" });
     }
   });
 
-  // Explicit static route mapping for /public and /data directories
+  // Explicit static route mapping
   app.use("/public", express.static(path.join(process.cwd(), "public")));
   app.use("/data", express.static(DATA_DIR));
 
@@ -905,7 +1118,7 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT} with Supabase database architecture`);
   });
 }
 

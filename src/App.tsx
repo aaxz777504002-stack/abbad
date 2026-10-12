@@ -82,6 +82,7 @@ import {
   ChevronLeft,
   Building,
   Smartphone,
+  DoorClosed,
   X
 } from "lucide-react";
 import html2canvas from "html2canvas";
@@ -90,25 +91,20 @@ import { motion, AnimatePresence } from "motion/react";
 import { Room, Guest, PendingRequest, HotelStats, ServiceRequest, UserRole, RoleType, VisitType, IncomingRequestAlert } from "./types";
 import { safeLocalStorage as localStorage, safeSessionStorage as sessionStorage } from "./lib/safeStorage";
 import {
-  googleSignIn,
-  googleSignInRedirect,
-  checkRedirectResult,
-  AuthErrorDetails,
-  parseAuthError, 
-  logout, 
-  getAccessToken, 
-  initAuth,
-  getFirebaseConfig,
-  savePendingRequestToFirestore,
-  deletePendingRequestFromFirestore,
-  fetchPendingRequestsFromFirestore,
-  subscribeToPendingRequests,
-  saveHotelConfigToFirestore,
-  subscribeToHotelConfig,
-  fetchHotelConfigFromFirestore,
-  saveHotelFullStateToFirestore,
-  fetchHotelFullStateFromFirestore
-} from "./lib/firebase";
+  getSupabaseClient,
+  fetchHotelDataFromSupabase,
+  saveRoomsToSupabase,
+  saveGuestsToSupabase,
+  saveServiceRequestsToSupabase,
+  savePendingRequestsToSupabase,
+  saveSinglePendingRequestToSupabase,
+  deletePendingRequestFromSupabase,
+  deleteGuestFromSupabase,
+  saveGateLogsToSupabase,
+  saveSettingToSupabase,
+  fetchSettingFromSupabase,
+  subscribeToSupabaseRealtime
+} from "./lib/supabase";
 import { AvailableRoomAssigner } from "./components/AvailableRoomAssigner";
 import { AdministrativeRoleSelector } from "./components/AdministrativeRoleSelector";
 import { GuestRemovalModal } from "./components/GuestRemovalModal";
@@ -1984,24 +1980,24 @@ export default function App() {
     } catch (e) {
       // LocalStorage quota guard
     }
-    saveHotelFullStateToFirestore({ pendingRequests: updatedRequests }).catch(console.warn);
+    savePendingRequestsToSupabase(updatedRequests).catch(console.warn);
   };
 
-  // Fetch pending requests with resilient multi-tier fallback (Firestore -> Serverless API -> Google Sheets -> LocalStorage)
+  // Fetch pending requests with resilient fallback (Supabase -> Backend API -> LocalStorage)
   const fetchPendingRequests = async (isBackgroundPoll = false) => {
     let requestsData: PendingRequest[] | null = null;
 
-    // Tier 1: Try Firebase Firestore (Cloud persistence, works on Vercel & all environments)
+    // Tier 1: Try Supabase Database directly
     try {
-      const firestoreList = await fetchPendingRequestsFromFirestore();
-      if (Array.isArray(firestoreList) && firestoreList.length > 0) {
-        requestsData = firestoreList;
+      const sbData = await fetchHotelDataFromSupabase();
+      if (sbData?.pendingRequests && Array.isArray(sbData.pendingRequests) && sbData.pendingRequests.length > 0) {
+        requestsData = sbData.pendingRequests;
       }
     } catch {
       // fallback
     }
 
-    // Tier 2: Try Serverless / Node.js Express API if available
+    // Tier 2: Try Backend API
     if (!requestsData) {
       try {
         const controller = new AbortController();
@@ -2020,7 +2016,7 @@ export default function App() {
           }
         }
       } catch {
-        // API unavailable or network timeout; seamlessly fallback without noisy logs
+        // API unavailable or network timeout
       }
     }
 
@@ -2065,43 +2061,49 @@ export default function App() {
     }
   };
 
-  // Real-time Firestore Cloud listener: Instant alerts & zero-latency sync from Vercel link submissions
+  // Real-time Supabase Cloud listener: Instant alerts & zero-latency sync across all devices
   useEffect(() => {
-    const unsubscribePending = subscribeToPendingRequests((firestoreList) => {
-      if (!firestoreList || !Array.isArray(firestoreList)) return;
-      
-      if (isFirstRequestFetchRef.current) {
-        firestoreList.forEach(r => knownRequestIdsRef.current.add(r.id));
-        isFirstRequestFetchRef.current = false;
-      } else {
-        const newRequests = firestoreList.filter(r => r.status === "pending" && !knownRequestIdsRef.current.has(r.id));
-        if (newRequests.length > 0) {
-          newRequests.forEach(req => {
-            knownRequestIdsRef.current.add(req.id);
-            triggerNewRequestAlert(req);
-          });
+    const unsubscribeSupabase = subscribeToSupabaseRealtime({
+      onRoomsChange: async () => {
+        const data = await fetchHotelDataFromSupabase();
+        if (data?.rooms && data.rooms.length > 0) {
+          setRooms(data.rooms);
+          localStorage.setItem("hotel_rooms", JSON.stringify(data.rooms));
         }
-        firestoreList.forEach(r => knownRequestIdsRef.current.add(r.id));
-      }
-
-      setPendingRequests(firestoreList);
-      try {
-        localStorage.setItem("hotel_pending_requests", JSON.stringify(firestoreList));
-      } catch {}
-    });
-
-    const unsubscribeConfig = subscribeToHotelConfig((cfg) => {
-      if (cfg && cfg.registrationLinkStatus) {
-        setRegistrationLinkOpen(cfg.registrationLinkStatus === "open");
-        try {
-          localStorage.setItem("hotel_registration_link_status", cfg.registrationLinkStatus);
-        } catch {}
+      },
+      onGuestsChange: async () => {
+        const data = await fetchHotelDataFromSupabase();
+        if (data?.guests && data.guests.length > 0) {
+          setGuests(data.guests);
+          localStorage.setItem("hotel_guests", JSON.stringify(data.guests));
+        }
+      },
+      onServicesChange: async () => {
+        const data = await fetchHotelDataFromSupabase();
+        if (data?.serviceRequests && data.serviceRequests.length > 0) {
+          setServiceRequests(data.serviceRequests);
+          localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
+        }
+      },
+      onGatesChange: async () => {
+        const data = await fetchHotelDataFromSupabase();
+        if (data?.gateLogs && data.gateLogs.length > 0) {
+          localStorage.setItem("gate_security_logs", JSON.stringify(data.gateLogs));
+        }
+      },
+      onPendingChange: () => {
+        fetchPendingRequests(true);
+      },
+      onSettingsChange: (key, val) => {
+        if (key === "registrationLinkStatus") {
+          setRegistrationLinkOpen(val === "open");
+          localStorage.setItem("hotel_registration_link_status", val);
+        }
       }
     });
 
     return () => {
-      if (typeof unsubscribePending === "function") unsubscribePending();
-      if (typeof unsubscribeConfig === "function") unsubscribeConfig();
+      if (typeof unsubscribeSupabase === "function") unsubscribeSupabase();
     };
   }, [soundAlertsEnabled]);
 
@@ -2113,14 +2115,14 @@ export default function App() {
     return () => clearInterval(timer);
   }, [soundAlertsEnabled]);
 
-  // Fetch config from server, Firestore, or local settings
+  // Fetch config from server or local settings
   const fetchBackendConfig = async () => {
-    // 1. Try Firestore
+    // 1. Try Supabase setting
     try {
-      const firestoreCfg = await fetchHotelConfigFromFirestore();
-      if (firestoreCfg && firestoreCfg.registrationLinkStatus) {
-        setRegistrationLinkOpen(firestoreCfg.registrationLinkStatus === "open");
-        localStorage.setItem("hotel_registration_link_status", firestoreCfg.registrationLinkStatus);
+      const sbStatus = await fetchSettingFromSupabase("registrationLinkStatus");
+      if (sbStatus) {
+        setRegistrationLinkOpen(sbStatus === "open");
+        localStorage.setItem("hotel_registration_link_status", sbStatus);
         return;
       }
     } catch {}
@@ -2141,26 +2143,7 @@ export default function App() {
         }
       }
     } catch {
-      // Quiet fallback to /config.json or localStorage
-    }
-
-    // Fallback cascade for static hosting & all path structures:
-    const candidatePaths = ["./config.json", "/config.json", "/data/config.json", "./data/config.json"];
-    for (const p of candidatePaths) {
-      try {
-        const staticRes = await fetch(p);
-        const staticContentType = staticRes.headers.get("content-type") || "";
-        if (staticRes.ok && (staticContentType.includes("application/json") || staticContentType.includes("text/plain"))) {
-          const staticData = await staticRes.json();
-          if (staticData && staticData.registrationLinkStatus) {
-            setRegistrationLinkOpen(staticData.registrationLinkStatus === "open");
-            localStorage.setItem("hotel_registration_link_status", staticData.registrationLinkStatus);
-            return;
-          }
-        }
-      } catch {
-        // Try next candidate path
-      }
+      // Quiet fallback
     }
 
     const localStatus = localStorage.getItem("hotel_registration_link_status");
@@ -2175,31 +2158,31 @@ export default function App() {
     setTimeout(() => setShowNotification(null), 4000);
   };
 
-
-
-
-
-
-
-
-  // Force manual refresh from backend server or Firestore
+  // Force manual refresh from Supabase or backend server
   const handleForceRefresh = async () => {
     setIsLoadingData(true);
     try {
-      // 1. Refresh from Firestore if available
-      const firestoreData = await fetchHotelFullStateFromFirestore();
-      if (firestoreData) {
-        if (firestoreData.rooms && firestoreData.rooms.length > 0) {
-          setRooms(firestoreData.rooms);
-          localStorage.setItem("hotel_rooms", JSON.stringify(firestoreData.rooms));
+      // 1. Refresh from Supabase if configured
+      const supabaseData = await fetchHotelDataFromSupabase();
+      if (supabaseData) {
+        if (supabaseData.rooms && supabaseData.rooms.length > 0) {
+          setRooms(supabaseData.rooms);
+          localStorage.setItem("hotel_rooms", JSON.stringify(supabaseData.rooms));
         }
-        if (firestoreData.guests && firestoreData.guests.length > 0) {
-          setGuests(firestoreData.guests);
-          localStorage.setItem("hotel_guests", JSON.stringify(firestoreData.guests));
+        if (supabaseData.guests && supabaseData.guests.length > 0) {
+          setGuests(supabaseData.guests);
+          localStorage.setItem("hotel_guests", JSON.stringify(supabaseData.guests));
         }
-        if (firestoreData.serviceRequests && firestoreData.serviceRequests.length > 0) {
-          setServiceRequests(firestoreData.serviceRequests);
-          localStorage.setItem("hotel_service_requests", JSON.stringify(firestoreData.serviceRequests));
+        if (supabaseData.serviceRequests && supabaseData.serviceRequests.length > 0) {
+          setServiceRequests(supabaseData.serviceRequests);
+          localStorage.setItem("hotel_service_requests", JSON.stringify(supabaseData.serviceRequests));
+        }
+        if (supabaseData.pendingRequests && supabaseData.pendingRequests.length > 0) {
+          setPendingRequests(supabaseData.pendingRequests);
+          localStorage.setItem("hotel_pending_requests", JSON.stringify(supabaseData.pendingRequests));
+        }
+        if (supabaseData.gateLogs && supabaseData.gateLogs.length > 0) {
+          localStorage.setItem("gate_security_logs", JSON.stringify(supabaseData.gateLogs));
         }
       } else {
         // 2. Refresh from backend server /api/hotel-data if available
@@ -2219,6 +2202,9 @@ export default function App() {
               setServiceRequests(data.serviceRequests);
               localStorage.setItem("hotel_service_requests", JSON.stringify(data.serviceRequests));
             }
+            if (Array.isArray(data.gateLogs) && data.gateLogs.length > 0) {
+              localStorage.setItem("gate_security_logs", JSON.stringify(data.gateLogs));
+            }
           }
         }
       }
@@ -2227,7 +2213,7 @@ export default function App() {
       const nowTime = new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       setLastSyncTimestamp(nowTime);
       localStorage.setItem("system_last_sync_time", nowTime);
-      triggerNotification("success", "تم تحديث ومزامنة كافة بيانات النظام بنجاح! 🟢");
+      triggerNotification("success", "تم تحديث ومزامنة كافة بيانات النظام مع قاعدة بيانات Supabase بنجاح! 🟢");
     } catch (err) {
       console.error("Force refresh error:", err);
       triggerNotification("info", "تم فحص المزامنة وحفظ البيانات بنجاح.");
@@ -2269,26 +2255,26 @@ export default function App() {
     }
   };
 
-  // Data persistence handlers (saving to Local Storage, Backend Server, and Firestore)
+  // Data persistence handlers (saving to Local Storage, Backend Server, and Supabase)
   const persistRooms = async (updatedRooms: Room[]) => {
     setRooms(updatedRooms);
     localStorage.setItem("hotel_rooms", JSON.stringify(updatedRooms));
     syncToBackendServer({ rooms: updatedRooms });
-    saveHotelFullStateToFirestore({ rooms: updatedRooms }).catch(console.warn);
+    saveRoomsToSupabase(updatedRooms).catch(console.warn);
   };
 
   const persistGuests = async (updatedGuests: Guest[]) => {
     setGuests(updatedGuests);
     localStorage.setItem("hotel_guests", JSON.stringify(updatedGuests));
     syncToBackendServer({ guests: updatedGuests });
-    saveHotelFullStateToFirestore({ guests: updatedGuests }).catch(console.warn);
+    saveGuestsToSupabase(updatedGuests).catch(console.warn);
   };
 
   const persistServiceRequests = async (updatedRequests: ServiceRequest[]) => {
     setServiceRequests(updatedRequests);
     localStorage.setItem("hotel_service_requests", JSON.stringify(updatedRequests));
     syncToBackendServer({ serviceRequests: updatedRequests });
-    saveHotelFullStateToFirestore({ serviceRequests: updatedRequests }).catch(console.warn);
+    saveServiceRequestsToSupabase(updatedRequests).catch(console.warn);
   };
 
   // Toggle Guest Registration Link Status (open/closed)
@@ -2298,12 +2284,12 @@ export default function App() {
 
     const statusStr = nextStatus ? "open" : "closed";
 
-    // 1. Update on Firebase Firestore (Immediate real-time sync across all devices & Vercel links)
-    saveHotelConfigToFirestore({ registrationLinkStatus: statusStr }).catch(err => {
-      console.warn("Could not save registration status to Firestore:", err);
+    // 1. Update on Supabase Database
+    saveSettingToSupabase("registrationLinkStatus", statusStr).catch(err => {
+      console.warn("Could not save registration status to Supabase:", err);
     });
 
-    // 2. Update on Serverless / Node.js backend
+    // 2. Update on backend
     try {
       await fetch("/api/config", {
         method: "POST",
@@ -2313,8 +2299,6 @@ export default function App() {
     } catch (err) {
       console.error("Failed to save config to server:", err);
     }
-
-
 
     triggerNotification("success", `تم تغيير حالة رابط التسجيل إلى: ${nextStatus ? "مفتوح" : "مغلق"}`);
   };
@@ -2474,9 +2458,9 @@ export default function App() {
       const updatedPending = [newPendingObj, ...pendingRequests.filter(r => r.id !== newGeneratedId)];
       persistPendingRequests(updatedPending);
 
-      // 1. Direct Cloud Persistence to Firebase Firestore (Immediate real-time delivery to reception)
-      savePendingRequestToFirestore(newPendingObj).catch(err => {
-        console.warn("Could not immediately push request to Firestore:", err);
+      // 1. Direct Cloud Persistence to Supabase Database
+      saveSinglePendingRequestToSupabase(newPendingObj).catch(err => {
+        console.warn("Could not immediately push request to Supabase:", err);
       });
 
 
@@ -2707,8 +2691,8 @@ export default function App() {
     localStorage.setItem("public_auth_username", publicUsername.trim());
     localStorage.setItem("public_auth_password", publicPassword.trim());
 
-    // Save to Firestore config
-    saveHotelConfigToFirestore({
+    // Save to Supabase config
+    saveSettingToSupabase("auth_credentials", {
       adminUsername: adminUsername.trim(),
       adminPassword: adminPassword.trim(),
       receptionUsername: receptionUsername.trim(),
@@ -2774,7 +2758,7 @@ export default function App() {
       localStorage.setItem("public_auth_password", newPasswordInput.trim());
     }
 
-    // Save to Firestore config
+    // Save to Supabase config
     const roleKeyMap: Record<string, string> = {
       admin: "adminPassword",
       reception: "receptionPassword",
@@ -2785,7 +2769,7 @@ export default function App() {
       public: "publicPassword"
     };
     const key = roleKeyMap[changePasswordTargetRole] || "publicPassword";
-    saveHotelConfigToFirestore({ [key]: newPasswordInput.trim() }).catch(console.warn);
+    saveSettingToSupabase(`auth_${key}`, newPasswordInput.trim()).catch(console.warn);
 
     setShowChangePasswordModal(false);
     setCurrentOldPasswordInput("");
@@ -2837,7 +2821,7 @@ export default function App() {
     localStorage.setItem("public_auth_username", "public");
     localStorage.setItem("public_auth_password", "1122");
 
-    saveHotelConfigToFirestore({
+    saveSettingToSupabase("auth_credentials", {
       adminUsername: "admin",
       adminPassword: "1234",
       receptionUsername: "reception",
@@ -2873,7 +2857,7 @@ export default function App() {
     setIsSavingAppLogoToSheets(true);
     try {
       localStorage.setItem("app_logo_image", appLogoImage);
-      await saveHotelConfigToFirestore({ appLogoImage });
+      await saveSettingToSupabase("appLogoImage", appLogoImage);
       triggerNotification("success", "تم حفظ وتطبيق شعار البرنامج بنجاح ليظهر في القائمة والشاشات! 🖼️🟢");
     } catch (err) {
       console.error(err);
@@ -2893,7 +2877,7 @@ export default function App() {
     setIsSavingLogoToSheets(true);
     try {
       localStorage.setItem("card_logo_image", cardLogoImage);
-      await saveHotelConfigToFirestore({ cardLogoImage });
+      await saveSettingToSupabase("cardLogoImage", cardLogoImage);
       triggerNotification("success", "تم حفظ وتطبيق شعار كرت النزيل بنجاح ليظهر في كافة بطاقات النزلاء! 🪪🟢");
     } catch (err) {
       console.error(err);
@@ -3388,8 +3372,8 @@ export default function App() {
     persistPendingRequests(updatedReqs);
     setProcessingRequestId(null);
 
-    // Sync to Firestore
-    savePendingRequestToFirestore(approvedItem).catch(() => {});
+    // Sync to Supabase
+    saveSinglePendingRequestToSupabase(approvedItem).catch(() => {});
 
     fetch("/api/requests/action", {
       method: "POST",
@@ -3779,7 +3763,7 @@ export default function App() {
         assignedGuestId: undefined 
       } : r);
       persistPendingRequests(updated);
-      savePendingRequestToFirestore({ ...request, status: "pending", assignedRoomNumber: undefined, assignedGuestId: undefined }).catch(() => {});
+      saveSinglePendingRequestToSupabase({ ...request, status: "pending", assignedRoomNumber: undefined, assignedGuestId: undefined }).catch(() => {});
       triggerNotification("success", "تمت إعادة الطلب إلى قائمة الانتظار بنجاح.");
 
       fetch("/api/requests/action", {
@@ -3796,12 +3780,12 @@ export default function App() {
     let updatedList: PendingRequest[];
     if (action === "delete") {
       updatedList = pendingRequests.filter(r => r.id !== id);
-      deletePendingRequestFromFirestore(id).catch(() => {});
+      deletePendingRequestFromSupabase(id).catch(() => {});
       fetch(`/api/requests?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
     } else {
       const rejectedItem: PendingRequest = { ...request, status: "rejected" as const };
       updatedList = pendingRequests.map(r => r.id === id ? rejectedItem : r);
-      savePendingRequestToFirestore(rejectedItem).catch(() => {});
+      saveSinglePendingRequestToSupabase(rejectedItem).catch(() => {});
     }
     persistPendingRequests(updatedList);
     triggerNotification("success", "تم تحديث حالة الطلب بنجاح.");
@@ -6576,7 +6560,7 @@ export default function App() {
                             onClick={() => {
                               setCardLogoImage("");
                               localStorage.removeItem("card_logo_image");
-                              saveHotelConfigToFirestore({ cardLogoImage: "" }).catch(console.warn);
+                              saveSettingToSupabase("cardLogoImage", "").catch(console.warn);
                               triggerNotification("success", "تم حذف شعار الفندق المخصص.");
                             }}
                             className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold text-xs px-3 py-2 rounded-xl transition"
@@ -7798,7 +7782,7 @@ export default function App() {
                         r.number.includes(reportSearchQuery) ||
                         r.name.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
                         r.type.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
-                        (r.features && r.features.some(f => f.toLowerCase().includes(reportSearchQuery.toLowerCase())));
+                        ((r as any).features && Array.isArray((r as any).features) && (r as any).features.some((f: string) => String(f).toLowerCase().includes(reportSearchQuery.toLowerCase())));
                       return matchQuery;
                     });
 
@@ -10310,10 +10294,10 @@ export default function App() {
                   <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-2">
                     <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-900">
                       <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                      <span>قواعد البيانات السحابية المتصلة: Cloud SQL (PostgreSQL) و Supabase</span>
+                      <span>قاعدة البيانات السحابية المعتمدة: Supabase Database</span>
                     </div>
                     <p className="text-xs text-slate-600 leading-relaxed">
-                      النظام متصل بقاعدة بيانات علائقية سحابية موثوقة (Cloud SQL في us-west1) ومتوافق بالكامل مع معمارية Supabase. يمكنك ربط مشروع Supabase الخاص بك، مزامنة الجداول، أو إعادة ضبط كافة البيانات بضغطة زر واحدة.
+                      النظام متصل ومربوط بالكامل بقاعدة بيانات Supabase السحابية مع تفعيل سياسات الأمان وصلاحيات الوصول (RLS & Grants) وتحديث كافة الجداول لحظياً عبر البث المباشر (Realtime).
                     </p>
                   </div>
 
