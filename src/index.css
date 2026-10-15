@@ -27,26 +27,56 @@ body {
   background: #94a3b8;
 }
 
-/* Print styles for resident identification card and reports */
+/* Print styles for resident identification cards, reports, and bulk cards */
 @media print {
   @page {
-    margin: 10mm;
+    margin: 8mm;
     size: auto;
   }
-  body {
-    background-color: white !important;
-    color: black !important;
+
+  html, body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
+
+  /* Reset all scrolling and overflow restrictions so multi-page printing works */
+  #root,
+  main,
+  div {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Explicitly hide all navigation and action bars in print */
+  aside,
+  header,
+  nav,
+  .no-print,
+  [role="alert"],
+  button,
+  .pointer-events-none {
+    display: none !important;
+  }
+
+  /* Default visibility reset */
   body * {
     visibility: hidden;
   }
-  #printable-resident-card, #printable-resident-card *,
-  #printable-report-container, #printable-report-container *,
-  #printable-bulk-cards, #printable-bulk-cards * {
+
+  /* 1. Single Resident Card (Centered on single card print) */
+  #printable-resident-card,
+  #printable-resident-card * {
     visibility: visible;
   }
+
   #printable-resident-card {
     position: absolute;
     left: 50%;
@@ -60,21 +90,38 @@ body {
     display: block !important;
     padding: 20px !important;
   }
-  #printable-report-container {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100% !important;
-    box-shadow: none !important;
-    background: white !important;
-    color: black !important;
-    display: block !important;
-    padding: 10px !important;
+
+  /* 2. Full Multi-Page Reports (Natural document flow without clipping) */
+  #printable-report-container,
+  #printable-report-container * {
+    visibility: visible;
   }
+
+  #printable-report-container {
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: white !important;
+    color: #0f172a !important;
+    display: block !important;
+    margin: 0 !important;
+    padding: 4mm 0 !important;
+  }
+
+  /* 3. Bulk Cards (Multi-page grid/flow) */
+  #printable-bulk-cards,
+  #printable-bulk-cards * {
+    visibility: visible;
+  }
+
   #printable-bulk-cards {
-    position: absolute;
-    left: 0;
-    top: 0;
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
     width: 100% !important;
     box-shadow: none !important;
     background: white !important;
@@ -82,13 +129,32 @@ body {
     display: block !important;
     padding: 0 !important;
   }
-  .card-print-item {
+
+  /* Page breaks & Table preservation */
+  .card-print-item,
+  tr,
+  .print-break-avoid {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
-    margin-bottom: 20px !important;
   }
-  .no-print {
-    display: none !important;
+
+  table {
+    page-break-inside: auto !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  /* Ensure SVG chart displays cleanly in print */
+  svg {
+    max-width: 100% !important;
   }
 }
 

@@ -275,7 +275,7 @@ export const DEFAULT_HOTEL_DATA = {
       year: "2026",
       checkInDate: "2026-09-15",
       checkOutDate: "2026-09-26",
-      photoUrl: "",
+      photoUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
       nationalId: "1087452319",
       qrCode: "GUEST-G-101-ROOM-101",
       notes: "رئيس الوفد الرسمي - ضيافة ملكية خاصة وخدمة كونسيرج 24/7"
@@ -294,7 +294,7 @@ export const DEFAULT_HOTEL_DATA = {
       year: "2026",
       checkInDate: "2026-09-16",
       checkOutDate: "2026-09-24",
-      photoUrl: "",
+      photoUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150",
       nationalId: "285091204581",
       qrCode: "GUEST-G-202-ROOM-202",
       notes: "منسق إداري وعضو اللجنة العليا المشتركة"
@@ -313,7 +313,7 @@ export const DEFAULT_HOTEL_DATA = {
       year: "2026",
       checkInDate: "2026-09-16",
       checkOutDate: "2026-09-25",
-      photoUrl: "",
+      photoUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150",
       nationalId: "784-1980-1234567-1",
       qrCode: "GUEST-G-301-ROOM-301",
       notes: "استقبال كبار الشخصيات والوفود الدبلوماسية مع موكب خاص"
@@ -332,7 +332,7 @@ export const DEFAULT_HOTEL_DATA = {
       year: "2026",
       checkInDate: "2026-09-17",
       checkOutDate: "2026-09-23",
-      photoUrl: "",
+      photoUrl: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150",
       nationalId: "28663400192",
       qrCode: "GUEST-G-402-ROOM-402",
       notes: "مستشار التخطيط الاستراتيجي والعلاقات العامة"

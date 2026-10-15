@@ -1003,14 +1003,14 @@ export const SecurityGateStation: React.FC<SecurityGateStationProps> = ({
                     </td>
                     <td className="p-3.5 font-bold text-slate-900">
                       <div className="flex items-center gap-2">
-                        {log.photoUrl && (
+                        {log.photoUrl && log.photoUrl.trim() !== "" ? (
                           <img
                             src={log.photoUrl}
                             alt=""
                             className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
                             referrerPolicy="no-referrer"
                           />
-                        )}
+                        ) : null}
                         <span>{log.guestName}</span>
                       </div>
                     </td>

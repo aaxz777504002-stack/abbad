@@ -67,7 +67,7 @@ export const GuestRemovalModal: React.FC<GuestRemovalModalProps> = ({
         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-slate-200 overflow-hidden shrink-0 border border-slate-300 flex items-center justify-center">
-              {guest.photoUrl ? (
+              {guest.photoUrl && guest.photoUrl.trim() !== "" ? (
                 <img 
                   src={guest.photoUrl} 
                   alt={guest.name} 

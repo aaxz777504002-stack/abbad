@@ -83,12 +83,13 @@ import {
   Building,
   Smartphone,
   DoorClosed,
+  TrendingUp,
   X
 } from "lucide-react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import { motion, AnimatePresence } from "motion/react";
-import { Room, Guest, PendingRequest, HotelStats, ServiceRequest, UserRole, RoleType, VisitType, IncomingRequestAlert } from "./types";
+import { Room, Guest, PendingRequest, HotelStats, ServiceRequest, UserRole, RoleType, VisitType, IncomingRequestAlert, GateEntryLog } from "./types";
 import { safeLocalStorage as localStorage, safeSessionStorage as sessionStorage } from "./lib/safeStorage";
 import {
   getSupabaseClient,
@@ -114,6 +115,19 @@ import { PhoneCountryInput } from "./components/PhoneCountryInput";
 import { CountrySelectInput } from "./components/CountrySelectInput";
 import { formatPhoneWithCountryCode } from "./lib/countryCodes";
 import { SupabaseDatabaseManager } from "./components/SupabaseDatabaseManager";
+import { GeneralReportView } from "./components/GeneralReportView";
+import { IndividualGuestReport } from "./components/IndividualGuestReport";
+import { WeeklyOccupancyReport } from "./components/WeeklyOccupancyReport";
+import { DetailedRoomReport } from "./components/DetailedRoomReport";
+import { AllGuestsReportView } from "./components/AllGuestsReportView";
+
+export const DEFAULT_GUEST_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150";
+export const getGuestPhotoUrl = (url?: string | null): string => {
+  if (!url || typeof url !== "string" || url.trim() === "") {
+    return DEFAULT_GUEST_AVATAR;
+  }
+  return url;
+};
 
 export const DEFAULT_ADMIN_ROLES: string[] = [
   "رئيس الوفد",
@@ -419,7 +433,7 @@ function GuestPhotoUploadWidget({
       <div className="flex flex-col md:flex-row items-center gap-5">
         <div className="relative group shrink-0">
           <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-2xl overflow-hidden border-2 border-emerald-500/40 shadow-md bg-slate-200 flex items-center justify-center relative">
-            {photoData.photoUrl ? (
+            {photoData.photoUrl && photoData.photoUrl.trim() !== "" ? (
               <img
                 src={photoData.photoUrl}
                 alt="Guest Photo"
@@ -1409,7 +1423,7 @@ export default function App() {
         {/* Header Title: خدر ليالي الأنس */}
         <div className="text-center z-10 relative mt-0.5 flex flex-col items-center">
           {/* Emblem / Hotel Logo Icon */}
-          {cardLogoImage ? (
+          {cardLogoImage && cardLogoImage.trim() !== "" ? (
             <img 
               src={cardLogoImage} 
               className="w-8 h-8 object-contain rounded-xl mb-0.5 border border-amber-400/50 shadow-md bg-emerald-950/80 p-0.5 filter drop-shadow-[0_2px_4px_rgba(217,119,6,0.5)]" 
@@ -1506,9 +1520,9 @@ export default function App() {
             {/* Double Border Frame */}
             <div className="relative p-0.5 rounded-[1.2rem] bg-gradient-to-br from-amber-300 via-amber-500 to-amber-600 shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
               <div className="border border-[#021811] rounded-[1.1rem] overflow-hidden bg-emerald-950/80 w-[96px] h-[148px] flex items-center justify-center relative">
-                {data.photoUrl ? (
+                {data.photoUrl && data.photoUrl.trim() !== "" ? (
                   <img 
-                    src={data.photoUrl} 
+                    src={getGuestPhotoUrl(data.photoUrl)} 
                     alt="Guest Photo" 
                     className="w-full h-full object-cover rounded-[1rem]"
                     crossOrigin="anonymous"
@@ -1732,8 +1746,17 @@ export default function App() {
 
   // Reports tab states
   const [activeReportSubTab, setActiveReportSubTab] = useState<
-    "all_guests" | "residents" | "checked_out" | "by_room" | "rooms_inventory" | "by_nationality" | "barcode_logs" | "bulk_print"
-  >("all_guests");
+    "general_summary" | "weekly_occupancy" | "all_guests" | "detailed_room" | "residents" | "checked_out" | "by_room" | "rooms_inventory" | "by_nationality" | "barcode_logs" | "bulk_print" | "individual_guest"
+  >("general_summary");
+  const [selectedReportRoomNumber, setSelectedReportRoomNumber] = useState<string>("");
+  const [gateLogs, setGateLogs] = useState<GateEntryLog[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gate_security_logs") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [selectedReportGuest, setSelectedReportGuest] = useState<Guest | null>(null);
   const [reportNationalityFilter, setReportNationalityFilter] = useState<string>("all");
   const [reportSearchQuery, setReportSearchQuery] = useState<string>("");
   const [bulkCardScope, setBulkCardScope] = useState<"residents" | "all">("residents");
@@ -3990,7 +4013,7 @@ export default function App() {
           await new Promise((resolve) => setTimeout(resolve, 150));
           const canvas = await html2canvas(element, {
             useCORS: true,
-            allowTaint: true,
+            allowTaint: false,
             scale: 2,
             backgroundColor: "#ffffff",
             logging: false
@@ -4047,7 +4070,8 @@ export default function App() {
       const canvas = await html2canvas(reportElem, {
         scale: 2,
         useCORS: true,
-        allowTaint: true,
+        allowTaint: false,
+        windowWidth: 1200,
         backgroundColor: "#ffffff",
         logging: false
       });
@@ -4430,9 +4454,9 @@ export default function App() {
 
               {/* Guest Details Card */}
               <div className="bg-slate-800/80 border border-slate-700/70 rounded-2xl p-3.5 mb-3 flex items-start gap-3.5">
-                {alert.request.photoUrl ? (
+                {alert.request.photoUrl && alert.request.photoUrl.trim() !== "" ? (
                   <img
-                    src={alert.request.photoUrl}
+                    src={getGuestPhotoUrl(alert.request.photoUrl)}
                     alt={alert.request.name}
                     className="w-12 h-12 rounded-full object-cover border-2 border-amber-400 shadow-md shrink-0 cursor-pointer hover:scale-105 transition"
                     onClick={() => setViewingPhotoGuest({
@@ -4680,28 +4704,43 @@ export default function App() {
               )}
 
               {hasPermission("reports") && (
-                <button 
-                  onClick={() => setActiveTab("reports")}
-                  className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${activeTab === "reports" && activeReportSubTab !== "bulk_print" ? "bg-emerald-900/50 text-white font-bold" : "text-emerald-300/80 hover:bg-emerald-900/30 hover:text-white"}`}
-                  title="عرض التقارير الفندقية التفصيلية والبطاقات الجماعية"
-                >
-                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>التقارير والبطاقات الجماعية</span>
-                </button>
-              )}
+                <>
+                  <button 
+                    onClick={() => {
+                      setActiveTab("reports");
+                      setActiveReportSubTab("general_summary");
+                    }}
+                    className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${activeTab === "reports" && activeReportSubTab === "general_summary" ? "bg-emerald-900/50 text-white font-bold" : "text-emerald-300/80 hover:bg-emerald-900/30 hover:text-white"}`}
+                    title="عرض التقرير العام الشامل والإحصائي للمنشأة"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>التقارير العامة الشاملة</span>
+                  </button>
 
-              {hasPermission("reports") && (
-                <button 
-                  onClick={() => {
-                    setActiveTab("reports");
-                    setActiveReportSubTab("bulk_print");
-                  }}
-                  className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${activeTab === "reports" && activeReportSubTab === "bulk_print" ? "bg-amber-500/20 text-amber-200 font-bold border border-amber-500/30" : "bg-amber-950/20 text-amber-300/90 border border-amber-500/10 hover:bg-amber-950/40 hover:text-white"}`}
-                  title="عرض وطباعة وتنزيل كافة كروت النزلاء المقيمين دفعة واحدة"
-                >
-                  <Printer className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="font-extrabold text-amber-200">طباعة وتنزيل الكروت الجماعية</span>
-                </button>
+                  <button 
+                    onClick={() => {
+                      setActiveTab("reports");
+                      setActiveReportSubTab("individual_guest");
+                    }}
+                    className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${activeTab === "reports" && activeReportSubTab === "individual_guest" ? "bg-emerald-900/50 text-white font-bold ring-1 ring-emerald-500/50" : "text-emerald-300/80 hover:bg-emerald-900/30 hover:text-white"}`}
+                    title="عرض وطباعة التقرير الفردي المعتمد للنزيل"
+                  >
+                    <User className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>التقارير الفردية للنزلاء</span>
+                  </button>
+
+                  <button 
+                    onClick={() => {
+                      setActiveTab("reports");
+                      setActiveReportSubTab("bulk_print");
+                    }}
+                    className={`w-full text-right px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${activeTab === "reports" && activeReportSubTab === "bulk_print" ? "bg-amber-500/20 text-amber-200 font-bold border border-amber-500/30" : "bg-amber-950/20 text-amber-300/90 border border-amber-500/10 hover:bg-amber-950/40 hover:text-white"}`}
+                    title="عرض وطباعة وتنزيل كافة كروت النزلاء المقيمين دفعة واحدة"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="font-extrabold text-amber-200">طباعة وتنزيل الكروت الجماعية</span>
+                  </button>
+                </>
               )}
             </div>
 
@@ -5359,7 +5398,7 @@ export default function App() {
                             <div key={guest.id} className="py-3.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3 hover:bg-slate-50/80 px-2 rounded-xl transition">
                               <div className="flex items-center gap-3 min-w-0">
                                 <img 
-                                  src={guest.photoUrl} 
+                                  src={getGuestPhotoUrl(guest.photoUrl)} 
                                   alt={guest.name} 
                                   className="w-11 h-11 rounded-full object-cover border-2 border-emerald-100 shadow-sm shrink-0"
                                   referrerPolicy="no-referrer"
@@ -5377,6 +5416,19 @@ export default function App() {
                               </div>
 
                               <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedReportGuest(guest);
+                                    setActiveTab("reports");
+                                    setActiveReportSubTab("individual_guest");
+                                  }}
+                                  className="px-2 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold rounded-xl transition flex items-center gap-1 cursor-pointer"
+                                  title="عرض وطباعة التقرير الفردي للنزيل"
+                                >
+                                  <Printer className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span className="hidden sm:inline">تقرير فردي</span>
+                                </button>
                                 <button 
                                   type="button"
                                   onClick={() => {
@@ -5441,7 +5493,7 @@ export default function App() {
                             <div key={guest.id} className="py-3.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3 hover:bg-slate-50/80 px-2 rounded-xl transition">
                               <div className="flex items-center gap-3 min-w-0">
                                 <img 
-                                  src={guest.photoUrl} 
+                                  src={getGuestPhotoUrl(guest.photoUrl)} 
                                   alt={guest.name} 
                                   className="w-11 h-11 rounded-full object-cover border-2 border-slate-200 shadow-sm shrink-0 grayscale opacity-80"
                                   referrerPolicy="no-referrer"
@@ -5753,7 +5805,7 @@ export default function App() {
                           {guestInRoom && (
                             <div className="mt-4 p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-3">
                               <img 
-                                src={guestInRoom.photoUrl} 
+                                src={getGuestPhotoUrl(guestInRoom.photoUrl)} 
                                 alt={guestInRoom.name} 
                                 className="w-9 h-9 rounded-full object-cover border border-slate-200"
                                 referrerPolicy="no-referrer"
@@ -5767,14 +5819,30 @@ export default function App() {
                         </div>
 
                         {/* Card Footer Actions */}
-                        <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-between gap-2">
-                          <button 
-                            onClick={() => handleStartEditRoom(room)}
-                            className="p-2 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-600 hover:text-slate-800 text-xs font-bold flex items-center justify-center gap-1 transition"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            تعديل الإعدادات
-                          </button>
+                        <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex flex-wrap justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setSelectedReportRoomNumber(room.number);
+                                setActiveReportSubTab("detailed_room");
+                                setActiveTab("reports");
+                              }}
+                              className="p-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-emerald-900 text-xs font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                              title="عرض وطباعة التقرير المفصل الشامل للغرفة"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>تقرير الغرفة</span>
+                            </button>
+
+                            <button 
+                              onClick={() => handleStartEditRoom(room)}
+                              className="p-2 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-600 hover:text-slate-800 text-xs font-bold flex items-center justify-center gap-1 transition"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              تعديل
+                            </button>
+                          </div>
 
                           {room.status === "available" ? (
                             <button 
@@ -5793,6 +5861,18 @@ export default function App() {
                           ) : (
                             guestInRoom && (
                               <div className="flex-1 flex gap-1.5">
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedReportGuest(guestInRoom);
+                                    setActiveReportSubTab("individual_guest");
+                                    setActiveTab("reports");
+                                  }}
+                                  className="p-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                                  title="عرض وطباعة التقرير الفردي للنزيل"
+                                >
+                                  <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                                </button>
                                 <button 
                                   type="button"
                                   onClick={() => handleOpenEditGuest(guestInRoom)}
@@ -5896,7 +5976,7 @@ export default function App() {
                                     title="انقر لمعاينة الصورة بدقة عالية وتعديل الجودة 🔍"
                                   >
                                     <img 
-                                      src={guest.photoUrl} 
+                                      src={getGuestPhotoUrl(guest.photoUrl)} 
                                       alt={guest.name} 
                                       className="w-10 h-10 rounded-full object-cover border-2 border-slate-200 group-hover:border-emerald-500 group-hover:scale-110 shadow-sm transition"
                                       referrerPolicy="no-referrer"
@@ -5941,6 +6021,20 @@ export default function App() {
                                     >
                                       <Edit3 className="w-3.5 h-3.5 text-amber-700" />
                                       <span>تعديل</span>
+                                    </button>
+
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedReportGuest(guest);
+                                        setActiveReportSubTab("individual_guest");
+                                        setActiveTab("reports");
+                                      }}
+                                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition flex items-center gap-1 cursor-pointer shadow-xs"
+                                      title="عرض وطباعة التقرير الفردي للنزيل"
+                                    >
+                                      <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                                      <span>تقرير وطباعة</span>
                                     </button>
 
                                     {guest.status === "resident" && (
@@ -6266,9 +6360,9 @@ export default function App() {
                           .map(req => (
                             <tr key={req.id} className="hover:bg-slate-50/80 transition">
                               <td className="p-4 pr-6">
-                                {req.photoUrl ? (
+                                {req.photoUrl && req.photoUrl.trim() !== "" ? (
                                   <img 
-                                    src={req.photoUrl} 
+                                    src={getGuestPhotoUrl(req.photoUrl)} 
                                     alt={req.name} 
                                     className="w-11 h-11 rounded-full object-cover border-2 border-emerald-500 shadow-sm cursor-pointer hover:scale-110 transition"
                                     onClick={() => setViewingPhotoGuest({
@@ -6280,7 +6374,7 @@ export default function App() {
                                       whatsapp: req.whatsapp,
                                       roomNumber: req.roomType,
                                       status: "resident",
-                                      photoUrl: req.photoUrl || "",
+                                      photoUrl: req.photoUrl || DEFAULT_GUEST_AVATAR,
                                       checkInDate: req.checkInDate || req.date
                                     })}
                                     title="انقر لمعاينة وتكبير الصورة"
@@ -6511,7 +6605,7 @@ export default function App() {
 
                   <div className="flex flex-col sm:flex-row items-center gap-4">
                     <div className="relative shrink-0">
-                      {cardLogoImage ? (
+                      {cardLogoImage && cardLogoImage.trim() !== "" ? (
                         <img 
                           src={cardLogoImage} 
                           alt="Hotel Logo" 
@@ -6936,7 +7030,7 @@ export default function App() {
                     <label className="block text-xs font-bold text-slate-600">صورة النزيل الشخصية:</label>
                     <div className="flex flex-col sm:flex-row items-center gap-4">
                       <img 
-                        src={cardForm.photoUrl} 
+                        src={getGuestPhotoUrl(cardForm.photoUrl)} 
                         alt="Preview Avatar" 
                         className="w-16 h-16 rounded-xl object-cover border-2 border-slate-200"
                         referrerPolicy="no-referrer"
@@ -7034,7 +7128,7 @@ export default function App() {
                           {/* Card Ribbon / Badge */}
                           <div className={`flex items-center justify-between border-b ${cfg.footerBorder} pb-3 mb-4 relative z-10`}>
                             <div className="flex items-center gap-2">
-                              {cardLogoImage ? (
+                              {cardLogoImage && cardLogoImage.trim() !== "" ? (
                                 <img src={cardLogoImage} className="w-8 h-8 rounded object-cover" alt="logo" crossOrigin="anonymous" />
                               ) : (
                                 <div className={`w-7 h-7 rounded ${cfg.logoColor} flex items-center justify-center text-white font-black text-[10px]`}>
@@ -7054,7 +7148,7 @@ export default function App() {
                           {/* Guest Photo */}
                           <div className="relative inline-block mb-3 z-10">
                             <img 
-                              src={cardForm.photoUrl} 
+                              src={getGuestPhotoUrl(cardForm.photoUrl)} 
                               alt="Guest" 
                               className="w-24 h-24 rounded-2xl object-cover mx-auto border-4 border-white/20 shadow"
                               referrerPolicy="no-referrer"
@@ -7110,7 +7204,7 @@ export default function App() {
                             {/* Card Ribbon / Badge */}
                             <div className={`flex items-center justify-between border-b ${cfg.footerBorder} pb-2`}>
                               <div className="flex items-center gap-2">
-                                {cardLogoImage ? (
+                                {cardLogoImage && cardLogoImage.trim() !== "" ? (
                                   <img src={cardLogoImage} className="w-8 h-8 rounded object-cover" alt="logo" crossOrigin="anonymous" />
                                 ) : (
                                   <div className={`w-7 h-7 rounded ${cfg.logoColor} flex items-center justify-center text-white font-black text-[10px]`}>
@@ -7131,7 +7225,7 @@ export default function App() {
                             <div className="flex items-center gap-3">
                               <div className="relative shrink-0">
                                 <img 
-                                  src={cardForm.photoUrl} 
+                                  src={getGuestPhotoUrl(cardForm.photoUrl)} 
                                   alt="Guest" 
                                   className="w-20 h-20 rounded-xl object-cover border-4 border-white/20 shadow"
                                   referrerPolicy="no-referrer"
@@ -7354,67 +7448,106 @@ export default function App() {
               </div>
 
               {/* Navigation Tabs for Reports */}
-              <div className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap gap-1.5 no-print">
-                <button
-                  onClick={() => { setActiveReportSubTab("all_guests"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "all_guests" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  تقرير جميع النزلاء
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("residents"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "residents" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <UserCheck className="w-3.5 h-3.5" />
-                  تقرير النزلاء الحاليين
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("checked_out"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "checked_out" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  تقرير النزلاء الخارجين
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("by_room"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "by_room" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <Bed className="w-3.5 h-3.5" />
-                  تفصيل الغرف والنزلاء
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("rooms_inventory"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "rooms_inventory" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <DoorClosed className="w-3.5 h-3.5" />
-                  تقرير الغرف الشامل
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("by_nationality"); setReportNationalityFilter("all"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "by_nationality" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  الفلترة حسب الجنسية
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("barcode_logs"); setReportSearchQuery(""); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "barcode_logs" ? "bg-emerald-800 text-white shadow" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  <QrCode className="w-3.5 h-3.5" />
-                  الدخول والخروج بالباركود
-                </button>
-                <button
-                  onClick={() => { setActiveReportSubTab("bulk_print"); }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${activeReportSubTab === "bulk_print" ? "bg-amber-700 text-white shadow" : "text-amber-800 bg-amber-50 hover:bg-amber-100/70"}`}
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  طباعة الكروت الجماعية
-                </button>
+              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 no-print">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md ml-1">
+                    التقارير العامة:
+                  </span>
+                  <button
+                    onClick={() => { setActiveReportSubTab("general_summary"); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "general_summary" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    التقرير العام الشامل
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("weekly_occupancy"); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "weekly_occupancy" ? "bg-emerald-800 text-white shadow-md font-black ring-2 ring-emerald-500/40" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>إشغال الغرف الأسبوعي (بياني)</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("all_guests"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "all_guests" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    جميع النزلاء
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("residents"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "residents" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    النزلاء المقيمين
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("checked_out"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "checked_out" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    النزلاء المغادرين
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("by_room"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "by_room" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <Bed className="w-3.5 h-3.5" />
+                    تفصيل الغرف
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("rooms_inventory"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "rooms_inventory" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <DoorClosed className="w-3.5 h-3.5" />
+                    جرد الغرف
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("by_nationality"); setReportNationalityFilter("all"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "by_nationality" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    حسب الجنسية
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("barcode_logs"); setReportSearchQuery(""); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "barcode_logs" ? "bg-emerald-800 text-white shadow-md font-black" : "text-slate-600 hover:bg-slate-100"}`}
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    سجل الباركود
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5 border-t xl:border-t-0 xl:border-r border-slate-200 pt-2 xl:pt-0 xl:pr-3">
+                  <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-2 py-1 rounded-md ml-1">
+                    التقارير الفردية والتفصيلية:
+                  </span>
+                  <button
+                    onClick={() => { setActiveReportSubTab("detailed_room"); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "detailed_room" ? "bg-emerald-900 text-white shadow-md font-black ring-2 ring-emerald-500" : "text-emerald-900 bg-emerald-50 hover:bg-emerald-100"}`}
+                  >
+                    <DoorClosed className="w-3.5 h-3.5 text-emerald-600" />
+                    تقرير مفصل لكل غرفة
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("individual_guest"); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "individual_guest" ? "bg-emerald-900 text-white shadow-md font-black ring-2 ring-emerald-500" : "text-emerald-900 bg-emerald-50 hover:bg-emerald-100"}`}
+                  >
+                    <User className="w-3.5 h-3.5 text-emerald-600" />
+                    التقرير الفردي للنزيل
+                  </button>
+                  <button
+                    onClick={() => { setActiveReportSubTab("bulk_print"); }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${activeReportSubTab === "bulk_print" ? "bg-amber-700 text-white shadow-md font-black" : "text-amber-800 bg-amber-50 hover:bg-amber-100/70"}`}
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    طباعة الكروت الجماعية
+                  </button>
+                </div>
               </div>
 
-              {/* Search & Filter bar for reports */}
-              {activeReportSubTab !== "bulk_print" && (
+              {/* Search & Filter bar for classic reports */}
+              {activeReportSubTab !== "bulk_print" && activeReportSubTab !== "general_summary" && activeReportSubTab !== "weekly_occupancy" && activeReportSubTab !== "individual_guest" && activeReportSubTab !== "all_guests" && activeReportSubTab !== "detailed_room" && (
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-3 items-center justify-between no-print">
                   <div className="relative w-full sm:w-96">
                     <input 
@@ -7465,7 +7598,73 @@ export default function App() {
               )}
 
               {/* REPORT CONTROLLER CONTAINER */}
-              {activeReportSubTab !== "bulk_print" ? (
+              {activeReportSubTab === "general_summary" ? (
+                <GeneralReportView
+                  rooms={rooms}
+                  guests={filteredGuests}
+                  serviceRequests={serviceRequests}
+                  gateLogs={gateLogs}
+                  stats={stats}
+                  appLogoImage={appLogoImage}
+                  cardLogoImage={cardLogoImage}
+                  onOpenIndividualReport={(g) => {
+                    setSelectedReportGuest(g);
+                    setActiveReportSubTab("individual_guest");
+                  }}
+                  triggerNotification={triggerNotification}
+                />
+              ) : activeReportSubTab === "weekly_occupancy" ? (
+                <WeeklyOccupancyReport
+                  rooms={rooms}
+                  guests={filteredGuests}
+                  appLogoImage={appLogoImage}
+                  cardLogoImage={cardLogoImage}
+                  triggerNotification={triggerNotification}
+                />
+              ) : activeReportSubTab === "all_guests" ? (
+                <AllGuestsReportView
+                  guests={filteredGuests}
+                  rooms={rooms}
+                  appLogoImage={appLogoImage}
+                  cardLogoImage={cardLogoImage}
+                  onOpenGuestReport={(g) => {
+                    setSelectedReportGuest(g);
+                    setActiveReportSubTab("individual_guest");
+                  }}
+                  onOpenRoomReport={(roomNum) => {
+                    setSelectedReportRoomNumber(roomNum);
+                    setActiveReportSubTab("detailed_room");
+                  }}
+                  triggerNotification={triggerNotification}
+                />
+              ) : activeReportSubTab === "detailed_room" ? (
+                <DetailedRoomReport
+                  rooms={rooms}
+                  guests={filteredGuests}
+                  serviceRequests={serviceRequests}
+                  initialRoomNumber={selectedReportRoomNumber}
+                  appLogoImage={appLogoImage}
+                  cardLogoImage={cardLogoImage}
+                  onOpenGuestReport={(g) => {
+                    setSelectedReportGuest(g);
+                    setActiveReportSubTab("individual_guest");
+                  }}
+                  onClose={() => setActiveReportSubTab("general_summary")}
+                  triggerNotification={triggerNotification}
+                />
+              ) : activeReportSubTab === "individual_guest" ? (
+                <IndividualGuestReport
+                  initialGuest={selectedReportGuest}
+                  guests={filteredGuests}
+                  rooms={rooms}
+                  serviceRequests={serviceRequests}
+                  gateLogs={gateLogs}
+                  appLogoImage={appLogoImage}
+                  cardLogoImage={cardLogoImage}
+                  onClose={() => setActiveReportSubTab("general_summary")}
+                  triggerNotification={triggerNotification}
+                />
+              ) : activeReportSubTab !== "bulk_print" ? (
                 <div id="printable-report-container" className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6">
                   
                   {/* Print-Only Header Logo */}
@@ -7481,7 +7680,6 @@ export default function App() {
                     </div>
                     <div className="text-left text-xs text-slate-500 font-medium">
                       <p>نوع التقرير: <b>
-                        {activeReportSubTab === "all_guests" && "تقرير النزلاء الكلي والأرشيف"}
                         {activeReportSubTab === "residents" && "تقرير النزلاء الحاليين والمقيمين"}
                         {activeReportSubTab === "checked_out" && "تقرير النزلاء الخارجين والمغادرين"}
                         {activeReportSubTab === "by_room" && "تقرير تفصيلي حسب الغرف ونوع الغرف والنزلاء"}
@@ -7492,71 +7690,6 @@ export default function App() {
                       <p>تاريخ الاستخراج: {new Date().toLocaleDateString("ar-EG")} | {new Date().toLocaleTimeString("ar-EG", {hour: "2-digit", minute:"2-digit"})}</p>
                     </div>
                   </div>
-
-                  {/* SUB-TAB 1: ALL GUESTS */}
-                  {activeReportSubTab === "all_guests" && (() => {
-                    const filtered = filteredGuests.filter(g => {
-                      const matchQuery = !reportSearchQuery || 
-                        g.name.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
-                        g.roomNumber.toLowerCase().includes(reportSearchQuery.toLowerCase()) ||
-                        g.mobile.includes(reportSearchQuery);
-                      return matchQuery;
-                    });
-
-                    return (
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center no-print">
-                          <h3 className="text-sm font-black text-slate-800">تقرير جميع النزلاء ككل والأرشيف</h3>
-                          <span className="text-xs text-slate-400 font-bold">تم العثور على {filtered.length} سجل</span>
-                        </div>
-
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-right border-collapse text-xs">
-                            <thead>
-                              <tr className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
-                                <th className="p-3 text-center">الصورة</th>
-                                <th className="p-3">اسم النزيل الكامل</th>
-                                <th className="p-3">الجنسية</th>
-                                <th className="p-3">رقم الجوال</th>
-                                <th className="p-3 text-center">رقم الغرفة</th>
-                                <th className="p-3">تاريخ الدخول</th>
-                                <th className="p-3">تاريخ المغادرة</th>
-                                <th className="p-3 text-center">حالة النزيل</th>
-                                <th className="p-3">الملاحظات والقيود</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {filtered.length === 0 ? (
-                                <tr>
-                                  <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">لا يوجد نزلاء متطابقين مع البحث حالياً</td>
-                                </tr>
-                              ) : (
-                                filtered.map(g => (
-                                  <tr key={g.id} className="hover:bg-slate-50/50 transition">
-                                    <td className="p-3 text-center">
-                                      <img src={g.photoUrl} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
-                                    </td>
-                                    <td className="p-3 font-extrabold text-slate-800">{g.name}</td>
-                                    <td className="p-3 font-semibold text-slate-600">{g.country}</td>
-                                    <td className="p-3 font-mono text-slate-600">{g.mobile || "-"}</td>
-                                    <td className="p-3 text-center font-black text-emerald-800 bg-emerald-50/40">{g.roomNumber}</td>
-                                    <td className="p-3 text-slate-500 font-medium">{new Date(g.checkInDate).toLocaleDateString("ar-EG")} {new Date(g.checkInDate).toLocaleTimeString("ar-EG", {hour: "2-digit", minute:"2-digit"})}</td>
-                                    <td className="p-3 text-slate-500 font-medium">{g.checkOutDate ? `${new Date(g.checkOutDate).toLocaleDateString("ar-EG")} ${new Date(g.checkOutDate).toLocaleTimeString("ar-EG", {hour: "2-digit", minute:"2-digit"})}` : "مقيم حالياً"}</td>
-                                    <td className="p-3 text-center">
-                                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${g.status === "resident" ? "bg-emerald-50 text-emerald-800 border-emerald-100" : "bg-slate-50 text-slate-500 border-slate-200"}`}>
-                                        {g.status === "resident" ? "مقيم حالياً" : "غادر الفندق"}
-                                      </span>
-                                    </td>
-                                    <td className="p-3 text-slate-400 italic truncate max-w-[150px]" title={g.notes}>{g.notes || "-"}</td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })()}
 
                   {/* SUB-TAB 2: RESIDENTS */}
                   {activeReportSubTab === "residents" && (() => {
@@ -7599,7 +7732,7 @@ export default function App() {
                                 filtered.map(g => (
                                   <tr key={g.id} className="hover:bg-slate-50/50 transition">
                                     <td className="p-3 text-center">
-                                      <img src={g.photoUrl} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
+                                      <img src={getGuestPhotoUrl(g.photoUrl)} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
                                     </td>
                                     <td className="p-3 font-extrabold text-slate-800">{g.name}</td>
                                     <td className="p-3 font-semibold text-slate-600">{g.country}</td>
@@ -7607,7 +7740,19 @@ export default function App() {
                                     <td className="p-3 text-center font-black text-emerald-800 bg-emerald-50/40">{g.roomNumber}</td>
                                     <td className="p-3 text-slate-500 font-medium">{new Date(g.checkInDate).toLocaleDateString("ar-EG")} {new Date(g.checkInDate).toLocaleTimeString("ar-EG", {hour: "2-digit", minute:"2-digit"})}</td>
                                     <td className="p-3 text-slate-400 italic truncate max-w-[150px]" title={g.notes}>{g.notes || "-"}</td>
-                                    <td className="p-3 text-center no-print flex gap-1 justify-center items-center">
+                                    <td className="p-3 text-center no-print flex gap-1 justify-center items-center flex-wrap">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedReportGuest(g);
+                                          setActiveReportSubTab("individual_guest");
+                                        }}
+                                        className="p-1 px-2 bg-emerald-800 text-white rounded-lg text-[10px] font-bold hover:bg-emerald-700 transition flex items-center gap-0.5 cursor-pointer shadow-xs"
+                                        title="عرض وطباعة التقرير الفردي المعتمد للنزيل"
+                                      >
+                                        <Printer className="w-3 h-3 text-emerald-200" />
+                                        <span>تقرير فردي</span>
+                                      </button>
                                       <button
                                         type="button"
                                         onClick={() => handleOpenEditGuest(g)}
@@ -7670,18 +7815,19 @@ export default function App() {
                                 <th className="p-3">تاريخ الدخول</th>
                                 <th className="p-3">تاريخ المغادرة والتحقق</th>
                                 <th className="p-3">الملاحظات المسجلة</th>
+                                <th className="p-3 text-center no-print">التقرير الفردي والطباعة</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {filtered.length === 0 ? (
                                 <tr>
-                                  <td colSpan={8} className="p-8 text-center text-slate-400 font-bold">لا توجد عمليات تسجيل خروج سابقة متوافقة مع البحث</td>
+                                  <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">لا توجد عمليات تسجيل خروج سابقة متوافقة مع البحث</td>
                                 </tr>
                               ) : (
                                 filtered.map(g => (
                                   <tr key={g.id} className="hover:bg-slate-50/50 transition">
                                     <td className="p-3 text-center">
-                                      <img src={g.photoUrl} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
+                                      <img src={getGuestPhotoUrl(g.photoUrl)} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
                                     </td>
                                     <td className="p-3 font-extrabold text-slate-800">{g.name}</td>
                                     <td className="p-3 font-semibold text-slate-600">{g.country}</td>
@@ -7690,6 +7836,20 @@ export default function App() {
                                     <td className="p-3 text-slate-500 font-medium">{new Date(g.checkInDate).toLocaleDateString("ar-EG")}</td>
                                     <td className="p-3 text-rose-700 font-extrabold">{g.checkOutDate ? `${new Date(g.checkOutDate).toLocaleDateString("ar-EG")} ${new Date(g.checkOutDate).toLocaleTimeString("ar-EG", {hour: "2-digit", minute:"2-digit"})}` : "-"}</td>
                                     <td className="p-3 text-slate-400 italic truncate max-w-[150px]" title={g.notes}>{g.notes || "-"}</td>
+                                    <td className="p-3 text-center no-print">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedReportGuest(g);
+                                          setActiveReportSubTab("individual_guest");
+                                        }}
+                                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer shadow-xs"
+                                        title="عرض وطباعة التقرير الفردي للنزيل"
+                                      >
+                                        <Printer className="w-3 h-3 text-emerald-600" />
+                                        <span>تقرير فردي</span>
+                                      </button>
+                                    </td>
                                   </tr>
                                 ))
                               )}
@@ -7905,18 +8065,19 @@ export default function App() {
                                 <th className="p-3">حالة السكن</th>
                                 <th className="p-3">تاريخ الدخول</th>
                                 <th className="p-3">تاريخ المغادرة</th>
+                                <th className="p-3 text-center no-print">التقرير الفردي والطباعة</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {filtered.length === 0 ? (
                                 <tr>
-                                  <td colSpan={8} className="p-8 text-center text-slate-400 font-bold">لا يوجد سجلات لنزلاء متوافقين مع الجنسية والبحث المختارين</td>
+                                  <td colSpan={9} className="p-8 text-center text-slate-400 font-bold">لا يوجد سجلات لنزلاء متوافقين مع الجنسية والبحث المختارين</td>
                                 </tr>
                               ) : (
                                 filtered.map(g => (
                                   <tr key={g.id} className="hover:bg-slate-50/50 transition">
                                     <td className="p-3 text-center">
-                                      <img src={g.photoUrl} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
+                                      <img src={getGuestPhotoUrl(g.photoUrl)} alt={g.name} className="w-8 h-8 rounded-full object-cover mx-auto border border-slate-200" referrerPolicy="no-referrer" />
                                     </td>
                                     <td className="p-3 font-extrabold text-slate-800">{g.name}</td>
                                     <td className="p-3 font-black text-emerald-800 flex items-center gap-1">
@@ -7932,6 +8093,20 @@ export default function App() {
                                     </td>
                                     <td className="p-3 text-slate-500 font-medium">{new Date(g.checkInDate).toLocaleDateString("ar-EG")}</td>
                                     <td className="p-3 text-slate-400 font-medium">{g.checkOutDate ? new Date(g.checkOutDate).toLocaleDateString("ar-EG") : "-"}</td>
+                                    <td className="p-3 text-center no-print">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedReportGuest(g);
+                                          setActiveReportSubTab("individual_guest");
+                                        }}
+                                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer shadow-xs"
+                                        title="عرض وطباعة التقرير الفردي للنزيل"
+                                      >
+                                        <Printer className="w-3 h-3 text-emerald-600" />
+                                        <span>تقرير فردي</span>
+                                      </button>
+                                    </td>
                                   </tr>
                                 ))
                               )}
@@ -7984,7 +8159,7 @@ export default function App() {
                                     <tr key={g.id} className="hover:bg-slate-50/50 transition">
                                       <td className="p-3 font-extrabold text-slate-800">
                                         <div className="flex items-center gap-2.5">
-                                          <img src={g.photoUrl} alt={g.name} className="w-7 h-7 rounded-full object-cover border border-slate-200" referrerPolicy="no-referrer" />
+                                          <img src={getGuestPhotoUrl(g.photoUrl)} alt={g.name} className="w-7 h-7 rounded-full object-cover border border-slate-200" referrerPolicy="no-referrer" />
                                           <div>
                                             <span>{g.name}</span>
                                             <span className="block text-[9px] text-slate-400 font-normal">المعرف: {g.id.slice(0,8).toUpperCase()}</span>
@@ -8149,7 +8324,7 @@ export default function App() {
                                     {/* ID Card Top Ribbon / Badge */}
                                     <div className={`flex items-center justify-between border-b ${cfg.footerBorder} pb-3 mb-4 relative z-10`}>
                                       <div className="flex items-center gap-2">
-                                        {cardLogoImage ? (
+                                        {cardLogoImage && cardLogoImage.trim() !== "" ? (
                                           <img src={cardLogoImage} className="w-8 h-8 rounded object-cover" alt="logo" />
                                         ) : (
                                           <div className={`w-8 h-8 rounded-lg ${cfg.logoColor} flex items-center justify-center text-white font-black text-xs`}>
@@ -8169,7 +8344,7 @@ export default function App() {
                                     {/* Guest Photo Section */}
                                     <div className="relative inline-block mb-3 z-10">
                                       <img 
-                                        src={guest.photoUrl} 
+                                        src={getGuestPhotoUrl(guest.photoUrl)} 
                                         alt={guest.name} 
                                         className="w-24 h-24 rounded-2xl object-cover mx-auto border-3 border-white/20 shadow"
                                         referrerPolicy="no-referrer"
@@ -8223,7 +8398,7 @@ export default function App() {
                                       {/* ID Card Top Ribbon / Badge */}
                                       <div className={`flex items-center justify-between border-b ${cfg.footerBorder} pb-2`}>
                                         <div className="flex items-center gap-2">
-                                          {cardLogoImage ? (
+                                          {cardLogoImage && cardLogoImage.trim() !== "" ? (
                                             <img src={cardLogoImage} className="w-8 h-8 rounded object-cover" alt="logo" />
                                           ) : (
                                             <div className={`w-7 h-7 rounded ${cfg.logoColor} flex items-center justify-center text-white font-black text-[10px]`}>
@@ -8244,7 +8419,7 @@ export default function App() {
                                       <div className="flex items-center gap-3">
                                         <div className="relative shrink-0">
                                           <img 
-                                            src={guest.photoUrl} 
+                                            src={getGuestPhotoUrl(guest.photoUrl)} 
                                             alt={guest.name} 
                                             className="w-16 h-16 rounded-xl object-cover border-2 border-white/20 shadow"
                                             referrerPolicy="no-referrer"
@@ -8591,7 +8766,7 @@ export default function App() {
                                 <div>
                                   <div className="flex items-start gap-4 mb-3">
                                     <img 
-                                      src={guest.photoUrl} 
+                                      src={getGuestPhotoUrl(guest.photoUrl)} 
                                       alt={guest.name} 
                                       className="w-12 h-12 rounded-full object-cover border border-slate-200 shadow-sm"
                                       referrerPolicy="no-referrer"
@@ -10099,7 +10274,7 @@ export default function App() {
 
                   <div className="flex flex-col sm:flex-row items-center gap-6 p-4 rounded-2xl bg-slate-50 border border-slate-100">
                     <div className="w-24 h-24 rounded-2xl bg-white border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
-                      {appLogoImage ? (
+                      {appLogoImage && appLogoImage.trim() !== "" ? (
                         <img src={appLogoImage} alt="App Logo" className="w-full h-full object-contain p-2" />
                       ) : (
                         <div className="text-center p-2">
@@ -10115,7 +10290,7 @@ export default function App() {
                           <span>رفع شعار جديد (PNG/JPG)</span>
                           <input type="file" accept="image/*" onChange={handleAppLogoUpload} className="hidden" />
                         </label>
-                        {appLogoImage && (
+                        {appLogoImage && appLogoImage.trim() !== "" && (
                           <>
                             <button
                               type="button"
@@ -10165,7 +10340,7 @@ export default function App() {
                     <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="font-extrabold text-xs text-slate-800">شعار كرت النزيل المستقل</span>
-                        {cardLogoImage && (
+                        {cardLogoImage && cardLogoImage.trim() !== "" && (
                           <button
                             type="button"
                             onClick={handleResetCardLogo}
@@ -10178,7 +10353,7 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-                          {cardLogoImage ? (
+                          {cardLogoImage && cardLogoImage.trim() !== "" ? (
                             <img src={cardLogoImage} alt="Card Logo" className="w-full h-full object-contain p-1" />
                           ) : (
                             <Hotel className="w-6 h-6 text-slate-300" />
@@ -10199,7 +10374,7 @@ export default function App() {
                     <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="font-extrabold text-xs text-slate-800">خلفية كرت النزيل المخصصة</span>
-                        {cardBgImage && (
+                        {cardBgImage && cardBgImage.trim() !== "" && (
                           <button
                             type="button"
                             onClick={handleResetCardBg}
@@ -10212,7 +10387,7 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-4">
                         <div className="w-16 h-16 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
-                          {cardBgImage ? (
+                          {cardBgImage && cardBgImage.trim() !== "" ? (
                             <img src={cardBgImage} alt="Card Bg" className="w-full h-full object-cover" />
                           ) : (
                             <Palette className="w-6 h-6 text-slate-300" />
