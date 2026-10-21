@@ -187,8 +187,9 @@ export const GeneralReportView: React.FC<GeneralReportViewProps> = ({
         triggerNotification?.("success", "تم تصدير التقرير العام بصيغة PDF بنجاح!");
       }
     } catch (err) {
-      console.error("General report export error:", err);
-      triggerNotification?.("error", "فشل تصدير التقرير كـ PDF. يرجى استخدام زر الطباعة الورقية.");
+      console.warn("General report export fallback to window.print:", err);
+      triggerNotification?.("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل التقرير بجودة عالية.");
+      window.print();
     } finally {
       setIsExporting(false);
     }

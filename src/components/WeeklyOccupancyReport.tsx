@@ -248,8 +248,9 @@ export const WeeklyOccupancyReport: React.FC<WeeklyOccupancyReportProps> = ({
         triggerNotification?.("success", "تم حفظ تقرير الإشغال الأسبوعي كـ PDF!");
       }
     } catch (err) {
-      console.error("PDF export error:", err);
-      triggerNotification?.("error", "حدث خطأ أثناء تصدير PDF. يرجى تجربة خيار الطباعة الورقية.");
+      console.warn("Weekly occupancy export fallback to window.print:", err);
+      triggerNotification?.("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل التقرير بجودة عالية.");
+      window.print();
     } finally {
       setIsExportingPDF(false);
     }

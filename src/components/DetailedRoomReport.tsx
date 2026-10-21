@@ -207,8 +207,9 @@ export const DetailedRoomReport: React.FC<DetailedRoomReportProps> = ({
         triggerNotification?.("success", `تم تصدير التقرير المفصل للغرفة ${currentRoom.number} بنجاح!`);
       }
     } catch (err) {
-      console.error("Room detailed report export error:", err);
-      triggerNotification?.("error", "فشل تصدير التقرير كـ PDF. يرجى تجربة الطباعة الورقية.");
+      console.warn("Room detailed report export fallback to window.print:", err);
+      triggerNotification?.("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل التقرير بجودة عالية.");
+      window.print();
     } finally {
       setIsExporting(false);
     }

@@ -17,10 +17,7 @@ export default defineConfig(({ command }) => {
         'react',
         'react-dom',
         'lucide-react',
-        'motion/react',
-        'firebase/app',
-        'firebase/auth',
-        'firebase/firestore'
+        'motion/react'
       ],
     },
     server: {

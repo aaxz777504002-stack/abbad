@@ -1,5 +1,17 @@
 import fs from "fs";
 import path from "path";
+import { createClient } from "@supabase/supabase-js";
+
+function getSupabaseClient() {
+  const url = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://eiuftadyyxmczizxmkin.supabase.co").trim();
+  const key = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
+  if (!url || !key) return null;
+  try {
+    return createClient(url, key, { auth: { persistSession: false } });
+  } catch {
+    return null;
+  }
+}
 
 function getRequestsFilePath(): string {
   const tmpPath = path.join("/tmp", "pending_requests.json");
@@ -86,14 +98,23 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
+    const sb = getSupabaseClient();
     let requests = readRequests();
 
     if (action === "delete") {
       requests = requests.filter(r => r.id !== id);
+      if (sb) {
+        try {
+          await sb.from("reservations").delete().eq("id", id);
+        } catch {}
+        try {
+          await sb.from("pending_requests").delete().eq("id", id);
+        } catch {}
+      }
     } else {
+      const updatedStatus = action === "approve" ? "approved" : action === "reset" ? "pending" : "rejected";
       requests = requests.map(r => {
         if (r.id === id) {
-          const updatedStatus = action === "approve" ? "approved" : action === "reset" ? "pending" : "rejected";
           return {
             ...r,
             status: updatedStatus,
@@ -103,6 +124,23 @@ export default async function handler(req: any, res: any) {
         }
         return r;
       });
+
+      if (sb) {
+        try {
+          await sb.from("reservations").update({
+            status: updatedStatus,
+            assigned_room_number: assignedRoomNumber || null,
+            assigned_guest_id: assignedGuestId || null
+          }).eq("id", id);
+        } catch {}
+        try {
+          await sb.from("pending_requests").update({
+            status: updatedStatus,
+            assigned_room_number: assignedRoomNumber || null,
+            assigned_guest_id: assignedGuestId || null
+          }).eq("id", id);
+        } catch {}
+      }
     }
 
     saveRequests(requests);

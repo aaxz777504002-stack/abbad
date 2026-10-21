@@ -95,6 +95,7 @@ import {
   getSupabaseClient,
   fetchHotelDataFromSupabase,
   saveRoomsToSupabase,
+  deleteRoomFromSupabase,
   saveGuestsToSupabase,
   saveServiceRequestsToSupabase,
   savePendingRequestsToSupabase,
@@ -1904,7 +1905,45 @@ export default function App() {
       } catch {}
     }
 
-    // 2. Load complete hotel data (rooms, guests, services, requests) from Node.js backend
+    // 2. Load complete hotel data from Supabase directly or Node.js backend
+    fetchHotelDataFromSupabase().then(sbData => {
+      if (sbData) {
+        if (sbData.rooms && sbData.rooms.length > 0) {
+          setRooms(sbData.rooms);
+          localStorage.setItem("hotel_rooms", JSON.stringify(sbData.rooms));
+        }
+        if (sbData.guests && sbData.guests.length > 0) {
+          setGuests(sbData.guests);
+          localStorage.setItem("hotel_guests", JSON.stringify(sbData.guests));
+        }
+        if (sbData.serviceRequests && sbData.serviceRequests.length > 0) {
+          setServiceRequests(sbData.serviceRequests);
+          localStorage.setItem("hotel_service_requests", JSON.stringify(sbData.serviceRequests));
+        }
+        if (sbData.pendingRequests && sbData.pendingRequests.length > 0) {
+          setPendingRequests(sbData.pendingRequests);
+          localStorage.setItem("hotel_pending_requests", JSON.stringify(sbData.pendingRequests));
+        }
+        if (sbData.hotelSettings?.auth_credentials) {
+          const auth = sbData.hotelSettings.auth_credentials;
+          if (auth.adminUsername) setAdminUsername(auth.adminUsername);
+          if (auth.adminPassword) setAdminPassword(auth.adminPassword);
+          if (auth.receptionUsername) setReceptionUsername(auth.receptionUsername);
+          if (auth.receptionPassword) setReceptionPassword(auth.receptionPassword);
+          if (auth.supervisorUsername) setSupervisorUsername(auth.supervisorUsername);
+          if (auth.supervisorPassword) setSupervisorPassword(auth.supervisorPassword);
+          if (auth.servicesUsername) setServicesUsername(auth.servicesUsername);
+          if (auth.servicesPassword) setServicesPassword(auth.servicesPassword);
+          if (auth.securityUsername) setSecurityUsername(auth.securityUsername);
+          if (auth.securityPassword) setSecurityPassword(auth.securityPassword);
+          if (auth.auditorUsername) setAuditorUsername(auth.auditorUsername);
+          if (auth.auditorPassword) setAuditorPassword(auth.auditorPassword);
+          if (auth.publicUsername) setPublicUsername(auth.publicUsername);
+          if (auth.publicPassword) setPublicPassword(auth.publicPassword);
+        }
+      }
+    }).catch(() => {});
+
     fetch("/api/hotel-data", { credentials: "include" })
       .then(res => {
         if (!res.ok) return null;
@@ -2206,6 +2245,23 @@ export default function App() {
         }
         if (supabaseData.gateLogs && supabaseData.gateLogs.length > 0) {
           localStorage.setItem("gate_security_logs", JSON.stringify(supabaseData.gateLogs));
+        }
+        if (supabaseData.hotelSettings?.auth_credentials) {
+          const auth = supabaseData.hotelSettings.auth_credentials;
+          if (auth.adminUsername) setAdminUsername(auth.adminUsername);
+          if (auth.adminPassword) setAdminPassword(auth.adminPassword);
+          if (auth.receptionUsername) setReceptionUsername(auth.receptionUsername);
+          if (auth.receptionPassword) setReceptionPassword(auth.receptionPassword);
+          if (auth.supervisorUsername) setSupervisorUsername(auth.supervisorUsername);
+          if (auth.supervisorPassword) setSupervisorPassword(auth.supervisorPassword);
+          if (auth.servicesUsername) setServicesUsername(auth.servicesUsername);
+          if (auth.servicesPassword) setServicesPassword(auth.servicesPassword);
+          if (auth.securityUsername) setSecurityUsername(auth.securityUsername);
+          if (auth.securityPassword) setSecurityPassword(auth.securityPassword);
+          if (auth.auditorUsername) setAuditorUsername(auth.auditorUsername);
+          if (auth.auditorPassword) setAuditorPassword(auth.auditorPassword);
+          if (auth.publicUsername) setPublicUsername(auth.publicUsername);
+          if (auth.publicPassword) setPublicPassword(auth.publicPassword);
         }
       } else {
         // 2. Refresh from backend server /api/hotel-data if available
@@ -3550,6 +3606,7 @@ export default function App() {
 
     const updatedRooms = rooms.filter(r => r.number !== roomNumber);
     persistRooms(updatedRooms);
+    deleteRoomFromSupabase(roomNumber).catch(console.warn);
 
     if (editingRoomNumber === roomNumber) {
       setEditingRoomNumber(null);
@@ -3600,6 +3657,7 @@ export default function App() {
 
     const updatedGuests = guests.filter(g => g.id !== guestId);
     persistGuests(updatedGuests);
+    deleteGuestFromSupabase(guestId).catch(console.warn);
 
     // Free up room if no other resident occupants
     if (target.roomNumber) {
@@ -3921,9 +3979,11 @@ export default function App() {
       const canvas = await html2canvas(element, {
         useCORS: true,
         allowTaint: false,
-        scale: 3, // High-DPI output
+        scale: 2, // Standard High-DPI output without memory exhaustion
         backgroundColor: "#ffffff",
-        logging: false
+        logging: false,
+        imageTimeout: 6000,
+        ignoreElements: (el) => el.classList.contains("no-print") || el.tagName === "IFRAME",
       });
 
       const fileName = `ID_Card_${(guestName || "guest").trim().replace(/\s+/g, "_")}`;
@@ -3957,7 +4017,7 @@ export default function App() {
         
         const fullFileName = `${fileName}.pdf`;
 
-        // Robust download method using Blob and ObjectURL (maximizes compatibility in iOS/Android & browser iframes)
+        // Robust download method using Blob and ObjectURL
         try {
           const blob = pdf.output("blob");
           const blobUrl = URL.createObjectURL(blob);
@@ -3970,15 +4030,15 @@ export default function App() {
           document.body.removeChild(link);
           setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
           triggerNotification("success", "تم تصدير وتحميل بطاقة النزيل كملف PDF بنجاح!");
-        } catch (blobErr) {
-          console.warn("Blob URL download failed, falling back to standard pdf.save:", blobErr);
+        } catch {
           pdf.save(fullFileName);
           triggerNotification("success", "تم تصدير وتحميل بطاقة النزيل كملف PDF بنجاح!");
         }
       }
     } catch (error) {
-      console.error("Export card error:", error);
-      triggerNotification("error", "خطأ أثناء محاولة تصدير البطاقة. يرجى تكرار المحاولة.");
+      console.warn("Export card error, activating print preview fallback:", error);
+      triggerNotification("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل البطاقة بجودة عالية.");
+      window.print();
     } finally {
       setIsExportingCard(false);
     }
@@ -4055,9 +4115,9 @@ export default function App() {
 
   // EXPORT CURRENT REPORT VIEW AS A PROFESSIONAL MULTI-PAGE PDF
   const handleExportReportPDF = async () => {
-    const reportElem = document.getElementById("printable-report-container");
+    const reportElem = document.getElementById("printable-report-container") || document.querySelector(".printable-report-container") || document.querySelector("main");
     if (!reportElem) {
-      triggerNotification("error", "تعذر العثور على محتوى التقرير للتصدير.");
+      window.print();
       return;
     }
     setIsExportingCard(true);
@@ -4067,13 +4127,15 @@ export default function App() {
       // Small pause to allow styles and fonts to render
       await new Promise(r => setTimeout(r, 200));
 
-      const canvas = await html2canvas(reportElem, {
+      const canvas = await html2canvas(reportElem as HTMLElement, {
         scale: 2,
         useCORS: true,
         allowTaint: false,
         windowWidth: 1200,
         backgroundColor: "#ffffff",
-        logging: false
+        logging: false,
+        imageTimeout: 6000,
+        ignoreElements: (el) => el.classList.contains("no-print") || el.tagName === "IFRAME",
       });
 
       const imgWidth = 595.28; // Standard A4 width in pt (210mm)
@@ -4113,8 +4175,9 @@ export default function App() {
         triggerNotification("success", "تم تصدير التقرير وتحميل ملف PDF بنجاح!");
       }
     } catch (err) {
-      console.error("Report PDF export error:", err);
-      triggerNotification("error", "حدث خطأ أثناء تصدير التقرير كملف PDF. يرجى تجربة الطباعة الورقية.");
+      console.warn("Report PDF export fallback to window.print:", err);
+      triggerNotification("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل التقرير بجودة عالية.");
+      window.print();
     } finally {
       setIsExportingCard(false);
     }
@@ -7320,25 +7383,14 @@ export default function App() {
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => {
-                        const testGuest: Guest = {
-                          id: "custom-" + Math.random().toString(36).substring(2, 9),
-                          name: cardForm.name || "سليمان بن عبد العزيز",
-                          country: cardForm.country,
-                          mobile: cardForm.mobile,
-                          roomNumber: cardForm.roomNumber || "204",
-                          checkInDate: new Date().toISOString(),
-                          status: "resident",
-                          photoUrl: cardForm.photoUrl,
-                          administrativeRole: cardForm.administrativeRole,
-                          notes: ""
-                        };
-                        setSelectedGuestForCard(testGuest);
+                        window.print();
                       }}
-                      className="w-full py-2.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-emerald-900 transition"
+                      className="w-full py-2.5 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-emerald-900 transition cursor-pointer"
                     >
-                      <Hotel className="w-3.5 h-3.5" />
-                      فتح نافذة طباعة البطاقة (Print Window)
+                      <Printer className="w-3.5 h-3.5 text-amber-400" />
+                      طباعة البطاقة مباشرة (Print Window)
                     </button>
 
                     {cardForm.mobile && (

@@ -154,8 +154,9 @@ export const IndividualGuestReport: React.FC<IndividualGuestReportProps> = ({
         triggerNotification?.("success", `تم تصدير التقرير الفردي للنزيل ${currentGuest.name} بنجاح!`);
       }
     } catch (err) {
-      console.error("Individual report export error:", err);
-      triggerNotification?.("error", "فشل تصدير التقرير كـ PDF. يرجى تجربة الطباعة الورقية.");
+      console.warn("Individual report export fallback to window.print:", err);
+      triggerNotification?.("info", "تم فتح نافذة الطباعة كبديل مباشر؛ يمكنك اختيار 'حفظ بتنسيق PDF' لتنزيل التقرير بجودة عالية.");
+      window.print();
     } finally {
       setIsExporting(false);
     }

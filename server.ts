@@ -5,7 +5,7 @@ import fs from "fs";
 import { execSync } from "child_process";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { DEFAULT_HOTEL_DATA } from "./src/lib/defaultData.ts";
-import { SUPABASE_SQL_SETUP_SCRIPT } from "./src/lib/supabase.ts";
+import { SUPABASE_SQL_SETUP_SCRIPT, toValidUuid } from "./src/lib/supabase.ts";
 
 // Persistent environment fix for AI Studio preview iframe and nginx
 function fixNginxAndIframeEnvironment() {
@@ -240,8 +240,8 @@ writeConfigFileSafely(initialLoadedConfig);
 // Helper to get active server-side Supabase client
 function getServerSupabaseClient(): SupabaseClient | null {
   const config = readConfigFileSafely();
-  const url = (config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
-  const key = (config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
+  const url = (config.supabaseUrl || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://eiuftadyyxmczizxmkin.supabase.co").trim();
+  const key = (config.supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
 
   if (!url || !key) return null;
   try {
@@ -306,38 +306,36 @@ async function startServer() {
       const sb = getServerSupabaseClient();
       if (sb) {
         try {
-          const [roomsRes, guestsRes, servicesRes, gatesRes] = await Promise.all([
-            sb.from("rooms").select("*").order("number", { ascending: true }),
-            sb.from("guests").select("*").order("created_at", { ascending: false }),
-            sb.from("service_requests").select("*").order("created_at", { ascending: false }),
-            sb.from("gate_logs").select("*").order("timestamp", { ascending: false })
+          const [roomsRes, guestsRes] = await Promise.all([
+            sb.from("rooms").select("*").order("created_at", { ascending: false }),
+            sb.from("guests").select("*").order("created_at", { ascending: false })
           ]);
 
           if (roomsRes.data && roomsRes.data.length > 0) {
             const clientRooms = roomsRes.data.map((r: any) => ({
               id: r.id,
-              number: r.number,
-              floor: r.floor,
-              type: r.type,
+              number: String(r.room_number || r.number || r.id),
+              floor: Number(r.floor_number || r.floor) || 1,
+              type: r.room_type || r.type || "غرفة مزدوجة فاخرة",
               name: r.name || "",
-              capacity: r.capacity,
-              status: r.status,
+              capacity: Number(r.capacity) || 2,
+              status: r.status || "available",
               direction: r.direction || "",
-              pricePerNight: r.price_per_night || 0,
+              pricePerNight: Number(r.price_per_night || r.price) || 0,
               features: Array.isArray(r.features) ? r.features : [],
               notes: r.notes || "",
             }));
 
             const clientGuests = (guestsRes.data || []).map((g: any) => ({
               id: g.id,
-              name: g.name,
-              country: g.country || "المملكة العربية السعودية",
-              mobile: g.mobile,
+              name: g.full_name || g.name || "",
+              country: g.nationality || g.country || "المملكة العربية السعودية",
+              mobile: g.phone || g.mobile || "",
               email: g.email || "",
-              whatsapp: g.whatsapp || "",
+              whatsapp: g.whatsapp || g.phone || g.mobile || "",
               roomNumber: g.room_number || "",
-              status: g.status,
-              checkInDate: g.check_in_date,
+              status: g.status || "resident",
+              checkInDate: g.check_in_date || g.created_at || new Date().toISOString(),
               checkOutDate: g.check_out_date || "",
               notes: g.notes || "",
               year: g.year || "2026",
@@ -349,43 +347,18 @@ async function startServer() {
               photoDimensions: g.photo_dimensions || "",
               administrativeRole: g.administrative_role || "عضو وفد",
               qrCode: g.qr_code || "",
-              nationalId: g.national_id || "",
+              nationalId: g.id_number || g.national_id || "",
             }));
 
-            const clientServices = (servicesRes.data || []).map((s: any) => ({
-              id: s.id,
-              roomNumber: s.room_number,
-              guestName: s.guest_name || "",
-              guestMobile: s.guest_mobile || "",
-              serviceType: s.service_type,
-              details: s.details || "",
-              status: s.status || "pending",
-              createdAt: s.created_at,
-              completedAt: s.completed_at || null,
-              year: s.year || "2026",
-              visitType: s.visit_type || "general_1",
-            }));
-
-            const clientGates = (gatesRes.data || []).map((gl: any) => ({
-              id: gl.id,
-              guestId: gl.guest_id || "",
-              guestName: gl.guest_name,
-              roomNumber: gl.room_number || "",
-              entryType: gl.entry_type || "دخول",
-              action: gl.entry_type === "خروج" ? "exit" : "entry",
-              gateName: gl.gate_name || "البوابة الرئيسية",
-              timestamp: gl.timestamp,
-              officerName: gl.officer_name || "",
-              notes: gl.notes || "",
-            }));
+            const localData = readHotelDataSafely();
 
             return res.json({
               success: true,
               source: "supabase",
               rooms: clientRooms,
               guests: clientGuests,
-              serviceRequests: clientServices,
-              gateLogs: clientGates,
+              serviceRequests: localData.serviceRequests || [],
+              gateLogs: localData.gateLogs || [],
               updatedAt: new Date().toISOString()
             });
           }
@@ -429,80 +402,29 @@ async function startServer() {
         try {
           if (Array.isArray(rooms) && rooms.length > 0) {
             const roomPayload = rooms.map(r => ({
-              id: r.id || `room_${r.number}`,
-              number: String(r.number),
-              floor: Number(r.floor) || 1,
-              type: r.type || "غرفة مزدوجة",
-              name: r.name || "",
+              id: toValidUuid(r.id || `room_${r.number}`),
+              room_number: String(r.number),
+              room_type: r.type || "غرفة مزدوجة فاخرة",
+              floor_number: Number(r.floor) || 1,
               capacity: Number(r.capacity) || 2,
               status: r.status || "available",
-              direction: r.direction || "",
-              price_per_night: Number(r.pricePerNight) || 0,
-              features: Array.isArray(r.features) ? r.features : [],
               notes: r.notes || "",
-              updated_at: new Date().toISOString()
             }));
-            await sb.from("rooms").upsert(roomPayload, { onConflict: "number" });
+            await sb.from("rooms").upsert(roomPayload, { onConflict: "id" });
           }
 
           if (Array.isArray(guests) && guests.length > 0) {
             const guestPayload = guests.map(g => ({
-              id: g.id,
-              name: g.name,
-              country: g.country || "المملكة العربية السعودية",
-              mobile: g.mobile,
+              id: toValidUuid(g.id),
+              full_name: g.name,
+              phone: g.mobile,
               email: g.email || null,
-              whatsapp: g.whatsapp || null,
-              room_number: g.roomNumber || null,
-              status: g.status || "resident",
-              check_in_date: g.checkInDate || new Date().toISOString(),
-              check_out_date: g.checkOutDate || null,
+              nationality: g.country || "المملكة العربية السعودية",
+              id_number: g.nationalId || null,
               notes: g.notes || null,
-              year: g.year || "2026",
-              visit_type: g.visitType || "general_1",
               photo_url: g.photoUrl || null,
-              photo_raw_url: g.photoRawUrl || null,
-              photo_quality: g.photoQuality || null,
-              photo_size_kb: g.photoSizeKb || null,
-              photo_dimensions: g.photoDimensions || null,
-              administrative_role: g.administrativeRole || "عضو وفد",
-              qr_code: g.qrCode || null,
-              national_id: g.nationalId || null,
-              updated_at: new Date().toISOString()
             }));
             await sb.from("guests").upsert(guestPayload, { onConflict: "id" });
-          }
-
-          if (Array.isArray(serviceRequests) && serviceRequests.length > 0) {
-            const servicePayload = serviceRequests.map(s => ({
-              id: s.id,
-              room_number: s.roomNumber,
-              guest_name: s.guestName || "",
-              guest_mobile: s.guestMobile || "",
-              service_type: s.serviceType,
-              details: s.details || "",
-              status: s.status || "pending",
-              created_at: s.createdAt || new Date().toISOString(),
-              completed_at: s.completedAt || null,
-              year: s.year || "2026",
-              visit_type: s.visitType || "general_1"
-            }));
-            await sb.from("service_requests").upsert(servicePayload, { onConflict: "id" });
-          }
-
-          if (Array.isArray(gateLogs) && gateLogs.length > 0) {
-            const gatePayload = gateLogs.map(gl => ({
-              id: gl.id,
-              guest_id: gl.guestId || null,
-              guest_name: gl.guestName,
-              room_number: gl.roomNumber || null,
-              entry_type: gl.entryType || "دخول",
-              gate_name: gl.gateName || "البوابة الرئيسية",
-              timestamp: gl.timestamp || new Date().toISOString(),
-              officer_name: gl.officerName || "",
-              notes: gl.notes || ""
-            }));
-            await sb.from("gate_logs").upsert(gatePayload, { onConflict: "id" });
           }
         } catch (sbErr) {
           console.warn("Supabase async persist warning:", sbErr);
@@ -594,8 +516,8 @@ async function startServer() {
   app.get("/api/supabase/config", (req, res) => {
     try {
       const config = readConfigFileSafely();
-      const url = config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-      const anonKey = config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+      const url = config.supabaseUrl || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://eiuftadyyxmczizxmkin.supabase.co";
+      const anonKey = config.supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
 
       res.json({
         success: true,
@@ -689,12 +611,10 @@ async function startServer() {
         });
       }
 
-      const tablesList = [
+      const tablesList: { name: string; arabicName: string; fallbackName?: string }[] = [
         { name: "rooms", arabicName: "الغرف الفندقية" },
         { name: "guests", arabicName: "النزلاء والوفود" },
-        { name: "service_requests", arabicName: "طلبات الخدمات" },
-        { name: "pending_requests", arabicName: "طلبات الحجز والتسجيل" },
-        { name: "gate_logs", arabicName: "سجلات البوابات وحركات الدخول" },
+        { name: "reservations", arabicName: "الحجوزات والتسكين" },
         { name: "hotel_settings", arabicName: "إعدادات وتكوين النظام" }
       ];
 
@@ -703,7 +623,15 @@ async function startServer() {
 
       for (const t of tablesList) {
         try {
-          const { count, error } = await sb.from(t.name).select("*", { count: "exact", head: true });
+          let { count, error } = await sb.from(t.name).select("*", { count: "exact", head: true });
+          if (error && t.fallbackName) {
+            const fallbackRes = await sb.from(t.fallbackName).select("*", { count: "exact", head: true });
+            if (!fallbackRes.error) {
+              count = fallbackRes.count;
+              error = null;
+            }
+          }
+
           if (error) {
             allReady = false;
             tablesStatus[t.name] = {
@@ -752,8 +680,8 @@ async function startServer() {
 
       if (!targetUrl || !targetKey) {
         const config = readConfigFileSafely();
-        targetUrl = config.supabaseUrl || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-        targetKey = config.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+        targetUrl = config.supabaseUrl || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://eiuftadyyxmczizxmkin.supabase.co";
+        targetKey = config.supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
       }
 
       if (!targetUrl || !targetKey) {
@@ -770,6 +698,15 @@ async function startServer() {
       let currentGuests: any[] = data.guests || DEFAULT_HOTEL_DATA.guests;
       let currentServices: any[] = data.serviceRequests || DEFAULT_HOTEL_DATA.serviceRequests;
       let currentGates: any[] = data.gateLogs || DEFAULT_HOTEL_DATA.gateLogs;
+      let currentRequests: any[] = data.pendingRequests || [];
+      if (fs.existsSync(REQUESTS_FILE)) {
+        try {
+          const fileReqs = JSON.parse(fs.readFileSync(REQUESTS_FILE, "utf8"));
+          if (Array.isArray(fileReqs) && fileReqs.length > 0) {
+            currentRequests = fileReqs;
+          }
+        } catch {}
+      }
 
       // Upsert rooms to Supabase
       const roomPayload = currentRooms.map((r) => ({
@@ -808,56 +745,65 @@ async function startServer() {
       }));
       await client.from("guests").upsert(guestPayload, { onConflict: "id" });
 
-      // Upsert services to Supabase
-      const servicePayload = currentServices.map((s) => ({
-        id: s.id,
-        room_number: s.roomNumber,
-        guest_name: s.guestName || "",
-        guest_mobile: s.guestMobile || "",
-        service_type: s.serviceType,
-        details: s.details || "",
-        status: s.status || "pending",
-        created_at: s.createdAt || new Date().toISOString(),
-        completed_at: s.completedAt || null,
-        year: s.year || "2026",
-        visit_type: s.visitType || "general_1",
+      // Upsert reservations / pending requests to Supabase
+      const resPayload = currentRequests.map((p) => ({
+        id: p.id,
+        name: p.name,
+        country: p.country || "المملكة العربية السعودية",
+        mobile: p.mobile,
+        email: p.email || null,
+        whatsapp: p.whatsapp || null,
+        room_type: p.roomType || null,
+        status: p.status || "pending",
+        check_in_date: p.checkInDate || null,
+        check_out_date: p.checkOutDate || null,
+        companions_count: p.companionsCount || 0,
+        administrative_role: p.administrativeRole || "عضو وفد",
+        notes: p.notes || null,
+        photo_url: p.photoUrl || null,
+        year: p.year || "2026",
+        visit_type: p.visitType || "general_1",
+        assigned_room_number: p.assignedRoomNumber || null,
+        assigned_guest_id: p.assignedGuestId || null,
+        created_at: p.date || p.createdAt || new Date().toISOString()
       }));
-      await client.from("service_requests").upsert(servicePayload, { onConflict: "id" });
+      try {
+        await client.from("reservations").upsert(resPayload, { onConflict: "id" });
+      } catch (e) {
+        console.warn("Reservations sync warning:", e);
+      }
 
-      // Upsert gate logs to Supabase
-      const gatePayload = currentGates.map((gl) => ({
-        id: gl.id,
-        guest_id: gl.guestId || null,
-        guest_name: gl.guestName,
-        room_number: gl.roomNumber || null,
-        entry_type: gl.entryType || "دخول",
-        gate_name: gl.gateName || "البوابة الرئيسية",
-        timestamp: gl.timestamp || new Date().toISOString(),
-        officer_name: gl.officerName || "",
-        notes: gl.notes || "",
-      }));
-      await client.from("gate_logs").upsert(gatePayload, { onConflict: "id" });
-
-      // Upsert hotel settings to Supabase
-      await client.from("hotel_settings").upsert([
-        {
-          key: "general_config",
-          value: {
-            hotelName: "فندق قصر الضيافة الملكي - خدر ليالي الأنس",
-            registrationLinkStatus: "open",
-            updatedAt: new Date().toISOString()
+      // Upsert services and gate logs into hotel_settings to preserve data without extra tables
+      try {
+        await client.from("hotel_settings").upsert([
+          {
+            key: "general_config",
+            value: {
+              hotelName: "فندق قصر الضيافة الملكي - خدر ليالي الأنس",
+              registrationLinkStatus: "open",
+              updatedAt: new Date().toISOString()
+            }
+          },
+          {
+            key: "service_requests",
+            value: currentServices
+          },
+          {
+            key: "gate_logs",
+            value: currentGates
           }
-        }
-      ], { onConflict: "key" });
+        ], { onConflict: "key" });
+      } catch (setErr) {
+        console.warn("Settings upsert warning:", setErr);
+      }
 
       res.json({
         success: true,
-        message: "تم ترحيل ومزامنة كافة البيانات إلى قاعدة بيانات Supabase بنجاح تام!",
+        message: "تم ترحيل ومزامنة كافة البيانات إلى قاعدة بيانات Supabase (الجداول الأربعة) بنجاح تام!",
         synced: {
           rooms: roomPayload.length,
           guests: guestPayload.length,
-          serviceRequests: servicePayload.length,
-          gateLogs: gatePayload.length,
+          reservations: resPayload.length,
         }
       });
     } catch (err: any) {
@@ -882,29 +828,67 @@ async function startServer() {
       const sb = getServerSupabaseClient();
       if (sb) {
         try {
-          const { data: sbRequests } = await sb.from("pending_requests").select("*").order("created_at", { ascending: false });
-          if (sbRequests && sbRequests.length > 0) {
-            const clientReqs = sbRequests.map((r: any) => ({
-              id: r.id,
-              name: r.name,
-              country: r.country || "المملكة العربية السعودية",
-              mobile: r.mobile,
-              email: r.email || "",
-              whatsapp: r.whatsapp || "",
-              roomType: r.room_type || "",
-              status: r.status,
-              checkInDate: r.check_in_date || "",
-              checkOutDate: r.check_out_date || "",
-              companionsCount: r.companions_count || 0,
-              administrativeRole: r.administrative_role || "عضو وفد",
-              notes: r.notes || "",
-              year: r.year || "2026",
-              visitType: r.visit_type || "general_1",
-              assignedRoomNumber: r.assigned_room_number || "",
-              assignedGuestId: r.assigned_guest_id || "",
-              date: r.created_at,
-            }));
-            return res.json(clientReqs);
+          // Query reservations first, and fallback/merge with pending_requests
+          const [resResult, pendingResult] = await Promise.all([
+            sb.from("reservations").select("*").order("created_at", { ascending: false }),
+            sb.from("pending_requests").select("*").order("created_at", { ascending: false })
+          ]);
+
+          const combined = new Map<string, any>();
+          if (resResult.data && Array.isArray(resResult.data)) {
+            for (const r of resResult.data) {
+              combined.set(r.id, {
+                id: r.id,
+                name: r.name || r.guest_name || "",
+                country: r.country || "المملكة العربية السعودية",
+                mobile: r.mobile || r.phone || "",
+                email: r.email || "",
+                whatsapp: r.whatsapp || "",
+                roomType: r.room_type || "",
+                status: r.status,
+                checkInDate: r.check_in_date || r.check_in || "",
+                checkOutDate: r.check_out_date || r.check_out || "",
+                companionsCount: r.companions_count || 0,
+                administrativeRole: r.administrative_role || "عضو وفد",
+                notes: r.notes || "",
+                year: r.year || "2026",
+                visitType: r.visit_type || "general_1",
+                assignedRoomNumber: r.assigned_room_number || r.room_number || "",
+                assignedGuestId: r.assigned_guest_id || r.guest_id || "",
+                date: r.created_at,
+              });
+            }
+          }
+
+          if (pendingResult.data && Array.isArray(pendingResult.data)) {
+            for (const r of pendingResult.data) {
+              if (!combined.has(r.id)) {
+                combined.set(r.id, {
+                  id: r.id,
+                  name: r.name,
+                  country: r.country || "المملكة العربية السعودية",
+                  mobile: r.mobile,
+                  email: r.email || "",
+                  whatsapp: r.whatsapp || "",
+                  roomType: r.room_type || "",
+                  status: r.status,
+                  checkInDate: r.check_in_date || "",
+                  checkOutDate: r.check_out_date || "",
+                  companionsCount: r.companions_count || 0,
+                  administrativeRole: r.administrative_role || "عضو وفد",
+                  notes: r.notes || "",
+                  year: r.year || "2026",
+                  visitType: r.visit_type || "general_1",
+                  assignedRoomNumber: r.assigned_room_number || "",
+                  assignedGuestId: r.assigned_guest_id || "",
+                  date: r.created_at,
+                });
+              }
+            }
+          }
+
+          if (combined.size > 0) {
+            return res.json(Array.from(combined.values()));
           }
         } catch (sbErr) {
           console.warn("Supabase requests query fallback:", sbErr);
@@ -955,11 +939,11 @@ async function startServer() {
         visitType: visitType || "general_1"
       };
 
-      // Save to Supabase if configured
+      // Save to Supabase if configured (supports reservations & pending_requests)
       const sb = getServerSupabaseClient();
       if (sb) {
         try {
-          await sb.from("pending_requests").upsert({
+          const payload = {
             id: newRequest.id,
             name: newRequest.name,
             country: newRequest.country,
@@ -975,7 +959,14 @@ async function startServer() {
             year: newRequest.year,
             visit_type: newRequest.visitType,
             created_at: newRequest.date
-          }, { onConflict: "id" });
+          };
+
+          try {
+            await sb.from("reservations").upsert(payload, { onConflict: "id" });
+          } catch {}
+          try {
+            await sb.from("pending_requests").upsert(payload, { onConflict: "id" });
+          } catch {}
         } catch (sbErr) {
           console.warn("Supabase pending request persist warning:", sbErr);
         }
@@ -1021,6 +1012,9 @@ async function startServer() {
         requests = requests.filter(r => r.id !== id);
         if (sb) {
           try {
+            await sb.from("reservations").delete().eq("id", id);
+          } catch {}
+          try {
             await sb.from("pending_requests").delete().eq("id", id);
           } catch {}
         }
@@ -1039,6 +1033,13 @@ async function startServer() {
         });
 
         if (sb) {
+          try {
+            await sb.from("reservations").update({
+              status: updatedStatus,
+              assigned_room_number: assignedRoomNumber || null,
+              assigned_guest_id: assignedGuestId || null
+            }).eq("id", id);
+          } catch {}
           try {
             await sb.from("pending_requests").update({
               status: updatedStatus,

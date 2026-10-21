@@ -55,9 +55,7 @@ export const SupabaseDatabaseManager: React.FC<SupabaseDatabaseManagerProps> = (
   const [tablesStatus, setTablesStatus] = useState<Record<string, TableStatus>>({
     rooms: { name: "rooms", arabicName: "الغرف الفندقية", exists: false, count: 0, accessible: false },
     guests: { name: "guests", arabicName: "النزلاء والوفود", exists: false, count: 0, accessible: false },
-    service_requests: { name: "service_requests", arabicName: "طلبات الخدمات والغرف", exists: false, count: 0, accessible: false },
-    pending_requests: { name: "pending_requests", arabicName: "طلبات الحجز والتسجيل", exists: false, count: 0, accessible: false },
-    gate_logs: { name: "gate_logs", arabicName: "سجلات البوابات الأمنية", exists: false, count: 0, accessible: false },
+    reservations: { name: "reservations", arabicName: "الحجوزات والتسكين", exists: false, count: 0, accessible: false },
     hotel_settings: { name: "hotel_settings", arabicName: "إعدادات وتكوين النظام", exists: false, count: 0, accessible: false },
   });
 
@@ -216,7 +214,7 @@ export const SupabaseDatabaseManager: React.FC<SupabaseDatabaseManagerProps> = (
       if (data.success) {
         setStatusMessage({
           type: "success",
-          text: `تم ترحيل ومزامنة كافة الجداول بنجاح! (${data.synced?.rooms || 0} غرف، ${data.synced?.guests || 0} نزلاء، ${data.synced?.serviceRequests || 0} طلبات، ${data.synced?.gateLogs || 0} حركات بوابات).`,
+          text: `تم ترحيل ومزامنة كافة الجداول بنجاح! (${data.synced?.rooms || 0} غرف، ${data.synced?.guests || 0} نزلاء، ${data.synced?.reservations || 0} حجوزات).`,
         });
         checkTables();
       } else {
@@ -354,7 +352,7 @@ export const SupabaseDatabaseManager: React.FC<SupabaseDatabaseManagerProps> = (
                 </label>
                 <input
                   type="text"
-                  placeholder="https://your-project-id.supabase.co"
+                  placeholder="https://eiuftadyyxmczizxmkin.supabase.co"
                   value={supabaseUrl}
                   onChange={(e) => setSupabaseUrl(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
@@ -364,7 +362,7 @@ export const SupabaseDatabaseManager: React.FC<SupabaseDatabaseManagerProps> = (
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                  مفتاح الوصول (API Key - anon public أو service_role)
+                  المفتاح العام (Publishable Anon Key - VITE_SUPABASE_ANON_KEY)
                 </label>
                 <input
                   type="password"
@@ -374,6 +372,9 @@ export const SupabaseDatabaseManager: React.FC<SupabaseDatabaseManagerProps> = (
                   className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   dir="ltr"
                 />
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                  🔒 يعمل النظام بالمفتاح العام مع سياسات RLS المحكمة دون الحاجة إطلاقاً إلى Service Role Key.
+                </p>
               </div>
             </div>
 
